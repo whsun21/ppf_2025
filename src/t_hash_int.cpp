@@ -182,6 +182,24 @@ int hashtableInsertHashed(hashtable_int *hashtbl, KeyType key, void *data)
     return 0;
 }
 
+int hashtableInsertHashed_2(hashtable_int* hashtbl, KeyType key, void* data)
+{
+    struct hashnode_i* node;
+    size_t hash = key % hashtbl->size;
+
+    node = (hashnode_i*)malloc(sizeof(struct hashnode_i));
+    if (!node)
+        return -1;
+
+    node->key = key;
+
+    node->data = data;
+    node->next = hashtbl->nodes[hash];
+    hashtbl->nodes[hash] = node;
+
+
+    return 0;
+}
 
 int hashtableRemove(hashtable_int *hashtbl, KeyType key)
 {

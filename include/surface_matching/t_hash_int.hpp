@@ -93,7 +93,8 @@ inline static uint next_power_of_two(uint value)
 hashtable_int *hashtableCreate(size_t size, size_t (*hashfunc)(uint));
 void hashtableDestroy(hashtable_int *hashtbl);
 int hashtableInsert(hashtable_int *hashtbl, KeyType key, void *data);
-int hashtableInsertHashed(hashtable_int *hashtbl, KeyType key, void *data);
+int hashtableInsertHashed(hashtable_int* hashtbl, KeyType key, void* data);
+int hashtableInsertHashed_2(hashtable_int *hashtbl, KeyType key, void *data);
 int hashtableRemove(hashtable_int *hashtbl, KeyType key);
 void *hashtableGet(hashtable_int *hashtbl, KeyType key);
 hashnode_i* hashtableGetBucketHashed(hashtable_int *hashtbl, KeyType key);

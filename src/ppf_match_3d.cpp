@@ -228,13 +228,7 @@ void PPF3DDetector::trainModel(const Mat &PC)
 
         Vec4d f = Vec4d::all(0);
         computePPFFeatures(p1, n1, p2, n2, f);
-        std::pair<KeyType, Vec4i> rst = hashPPF2(f, angle_step_radians, distanceStep);
-        KeyType hashValue = rst.first;
-        Vec4i fDiscrete = rst.second;
-        unsigned long long fDKeeped =   ((unsigned long long) fDiscrete[3]) * 1000000000 +
-                                    ((unsigned long long) fDiscrete[0]) * 1000000 +
-                                    ((unsigned long long) fDiscrete[1]) * 1000 +
-                                    ((unsigned long long) fDiscrete[2]);
+        KeyType hashValue = hashPPF(f, angle_step_radians, distanceStep);
         double alpha = computeAlpha(p1, n1, p2);
         uint ppfInd = i*numRefPoints+j;
 
@@ -242,9 +236,8 @@ void PPF3DDetector::trainModel(const Mat &PC)
         hashNode->id = hashValue;
         hashNode->i = i;
         hashNode->ppfInd = ppfInd;
-        hashNode->fDKeeped = fDKeeped;
 
-        hashtableInsertHashed(hashTable, hashValue, (void*)hashNode);
+        hashtableInsertHashed_2(hashTable, hashValue, (void*)hashNode); // hashtableInsertHashed_2
 
         Mat(f).reshape(1, 1).convertTo(ppf.row(ppfInd).colRange(0, 4), CV_32F);
         ppf.ptr<float>(ppfInd)[4] = (float)alpha;
@@ -460,9 +453,7 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
 
         Vec4d f = Vec4d::all(0);
         computePPFFeatures(p1, n1, p2, n2, f);
-        std::pair<KeyType, Vec4i> rst = hashPPF2(f, angle_step, distanceStep);
-        KeyType hashValue = rst.first;
-        Vec4i fDiscrete = rst.second;
+        KeyType hashValue = hashPPF(f, angle_step, distanceStep);
         p2t = tsg + Rsg * Vec3d(p2);
 
         alpha_scene=atan2(-p2t[2], p2t[1]);
@@ -481,27 +472,27 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
 
         while (node)
         {
-          THash* tData = (THash*) node->data;
-          int corrI = (int)tData->i;
-          int ppfInd = (int)tData->ppfInd;
-          float* ppfCorrScene = ppf.ptr<float>(ppfInd);
-          double alpha_model = (double)ppfCorrScene[PPF_LENGTH-1];
-          double alpha = alpha_model - alpha_scene;
+            THash* tData = (THash*) node->data;
+            int corrI = (int)tData->i;
+            int ppfInd = (int)tData->ppfInd;
+            float* ppfCorrScene = ppf.ptr<float>(ppfInd);
+            double alpha_model = (double)ppfCorrScene[PPF_LENGTH - 1];
+            double alpha = alpha_model - alpha_scene;
 
-          /*  Tolga Birdal's note: Map alpha to the indices:
-                  atan2 generates results in (-pi pi]
-                  That's why alpha should be in range [-2pi 2pi]
-                  So the quantization would be :
-                  numAngles * (alpha+2pi)/(4pi)
-                  */
+            /*  Tolga Birdal's note: Map alpha to the indices:
+                    atan2 generates results in (-pi pi]
+                    That's why alpha should be in range [-2pi 2pi]
+                    So the quantization would be :
+                    numAngles * (alpha+2pi)/(4pi)
+                    */
 
-          //printf("%f\n", alpha);
-          int alpha_index = (int)(numAngles*(alpha + 2*M_PI) / (4*M_PI));
+                    //printf("%f\n", alpha);
+            int alpha_index = (int)(numAngles * (alpha + 2 * M_PI) / (4 * M_PI));
 
-          uint accIndex = corrI * numAngles + alpha_index;
+            uint accIndex = corrI * numAngles + alpha_index;
 
-          accumulator[accIndex]++;
-          node = node->next;
+            accumulator[accIndex]++;
+            node = node->next;
         }
       }
     }

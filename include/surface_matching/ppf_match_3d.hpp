@@ -43,7 +43,6 @@ typedef struct THash
 {
   int id;
   int i, ppfInd;
-  unsigned long long fDKeeped;
 } THash;
 
 /**
