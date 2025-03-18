@@ -121,22 +121,30 @@ PPF3DDetector::PPF3DDetector(const double RelativeSamplingStep, const double Rel
   hash_table = NULL;
   hash_nodes = NULL;
 
-  setSearchParams();
+  //setSearchParams();
 }
 
 void PPF3DDetector::setSearchParams(const double positionThreshold, const double rotationThreshold, const bool useWeightedClustering)
 {
   if (positionThreshold<0)
-    position_threshold = sampling_step_relative;
+    position_threshold = sampling_step_relative; // ÓÐÎÊÌâ
   else
     position_threshold = positionThreshold;
 
   if (rotationThreshold<0)
-    rotation_threshold = ((360/angle_step) / 180.0 * M_PI);
+    rotation_threshold = angle_step_radians;
   else
     rotation_threshold = rotationThreshold;
 
   use_weighted_avg = useWeightedClustering;
+}
+
+Mat PPF3DDetector::getSampledModel()
+{
+    if (!trained) {
+        throw cv::Exception(cv::Error::StsError, "The model is not trained. Cannot get SampledModel without training", __FUNCTION__, __FILE__, __LINE__);
+    }
+    return sampled_pc;
 }
 
 // compute per point PPF as in paper
@@ -212,6 +220,9 @@ void PPF3DDetector::trainModel(const Mat &PC)
   // inserts into the hashtable
   // But it is still there to be investigated. For now, I leave this unparallelized
   // since this is just a training part.
+#if defined _OPENMP
+#pragma omp parallel for
+#endif
   for (int i=0; i<numRefPoints; i++)
   {
     const Vec3f p1(sampled.ptr<float>(i));
@@ -251,6 +262,8 @@ void PPF3DDetector::trainModel(const Mat &PC)
   num_ref_points = numRefPoints;
   sampled_pc = sampled;
   trained = true;
+  setSearchParams(distanceStep, angle_step_radians, false);
+
 }
 
 
@@ -413,6 +426,15 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   float diameter = sqrt ( dx * dx + dy * dy + dz * dz );
   float distanceSampleStep = diameter * RelativeSceneDistance;*/
   Mat sampled = samplePCByQuantization(pc, xRange, yRange, zRange, (float)relativeSceneDistance, 0);
+  Mat sampled_ref = Mat(sampled.rows / sceneSamplingStep, pc.cols, CV_32F);
+  int c = 0;
+  for (int i = 0; i < sampled.rows && c < sampled_ref.rows; i += sceneSamplingStep)
+  {
+      sampled.row(i).copyTo(sampled_ref.row(c++));
+  }
+
+  writePLY(sampled, "../samples/data/results/sampled_scene.ply");
+  writePLY(sampled_ref, "../samples/data/results/sampled_scene_ref.ply");
 
   // allocate the accumulator : Moved this to the inside of the loop
   /*#if !defined (_OPENMP)

@@ -106,6 +106,8 @@ public:
   void read(const FileNode& fn);
   void write(FileStorage& fs) const;
 
+  Mat getSampledModel();
+
 protected:
 
   double angle_step, angle_step_radians, distance_step;

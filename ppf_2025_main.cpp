@@ -61,8 +61,10 @@ int main(int argc, char** argv)
     std::vector<std::string> sStr, sn;
     boost::split(sStr, sceneFileName, boost::is_any_of("/"));
     boost::split(sn, *(sStr.end() - 1), boost::is_any_of("."));
-    string resultFileName = (string)argv[3]+"/"+ mn[0]+"-"+sn[0] +"-" + "PCTrans.ply"; //resultFileName = "../samples/data/results//chicken_small2-rs1_normals-PCTrans.ply"
-    
+    string resultFileName = (string)argv[3]+"/"+ mn[0]+"-"+sn[0] +"-" + "PCTrans"; //resultFileName = "../samples/data/results//chicken_small2-rs1_normals-PCTrans.ply"
+    float keypointStep = stoi((string)argv[4]);
+    size_t N = stoi((string)argv[5]);
+
     Mat pc = loadPLYSimple(modelFileName.c_str(), 1);
     
     // Now train the model
@@ -82,7 +84,7 @@ int main(int argc, char** argv)
     cout << endl << "Starting matching..." << endl;
     vector<Pose3DPtr> results;
     tick1 = cv::getTickCount();
-    detector.match(pcTest, results, 1.0/40.0, 0.05);
+    detector.match(pcTest, results, 1.0/ keypointStep, 0.05); //1.0/40.0, 0.05
     tick2 = cv::getTickCount();
     cout << endl << "PPF Elapsed Time " <<
          (tick2-tick1)/cv::getTickFrequency() << " sec" << endl;
@@ -96,7 +98,6 @@ int main(int argc, char** argv)
     }
 
     // Get only first N results - but adjust to results size if num of results are less than that specified by N
-    size_t N = 2;
     if (results_size < N) {
         cout << endl << "Reducing matching poses to be reported (as specified in code): "
              << N << " to the number of matches found: " << results_size << endl;
@@ -118,15 +119,16 @@ int main(int argc, char** argv)
          
     cout << "Poses: " << endl;
     // debug first five poses
+    Mat pc_sampled = detector.getSampledModel();
     for (size_t i=0; i<resultsSub.size(); i++)
     {
         Pose3DPtr result = resultsSub[i];
         cout << "Pose Result " << i << endl;
         result->printPose();
-        if (i==0)
+        //if (i==0)
         {
-            Mat pct = transformPCPose(pc, result->pose); 
-            writePLY(pct, (resultFileName).c_str());
+            Mat pct = transformPCPose(pc_sampled, result->pose); //pc是原始模型
+            writePLY(pct, (resultFileName  + to_string(i) + ".ply").c_str());
         }
     }
     
