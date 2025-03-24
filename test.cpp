@@ -12,123 +12,183 @@
 #include "_deps/Eigen/Dense"
 #include <opencv2/core/eigen.hpp>
 #include <map>
+#include <iostream>
 
 using namespace std;
 using namespace cv;
 using namespace ppf_match_3d;
 
+int writeMap(const map<string, vector<double>> & m, const string & outPath);
+int readMap(map<string, vector<double>>& m2, const string& inPath);
+
 int evalUwa() {
+    cout << "eval UWA" << endl;
+    string dataName = "UWA";
+
     string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/UWA/";
     string configPath = "3D models/Mian/";
     string predPath = "D:/wenhao.sun/Documents/GitHub/1-project/Halcon_benchmark/halconResults/uwa/";
 
-
-
-    //  
-    string cfgPath0 = rootPath + configPath + "ConfigScene1.ini";//cfgName
-    LPCTSTR cfgPath = cfgPath0.c_str();
-    
-    // 多个模型
     vector<string> uwaModelName{ "parasaurolophus_high", "cheff", "chicken_high", "T-rex_high" };
     //cout << uwaModelName[0] << endl;
     map< string, vector<double>> ADDMap;
     map< string, vector<double>> phiMap;
     map< string, vector<double>> dNormMap;
+    map< string, vector<double>> timeMap;
+    for (int i = 0; i < uwaModelName.size(); i++) {
+        ADDMap[uwaModelName[i]] = vector<double>();
+        phiMap[uwaModelName[i]] = vector<double>();
+        dNormMap[uwaModelName[i]] = vector<double>();
+        timeMap[uwaModelName[i]] = vector<double>();
+    }
+    string ADDName = "../eval_"+ dataName + (string)"/eval_ADD.txt";
+    string phiName = "../eval_" + dataName + (string)"/eval_phi.txt";
+    string dNormName = "../eval_" + dataName + (string)"/eval_dNorm.txt";
+    string timeName = "../eval_" + dataName + (string)"/eval_time.txt";
 
-    LPSTR  modelNumCh = new char[1024];
-    GetPrivateProfileString("MODELS", "NUMBER", "NULL", modelNumCh, 512, cfgPath);
-    int modelNum = atoi(modelNumCh);
-    string modelKey, modelGTKey;
-    for (int i = 0; i < modelNum; i++) {
-        modelKey = "MODEL_" + to_string(i);
-        modelGTKey = modelKey + "_GROUNDTRUTH";  
+    // 所有场景
+    string cfgsFile = rootPath + configPath + "configFilesList.txt";
+    vector<string> cfgNameAll;
+    ifstream cfg_ifs(cfgsFile);
+    string cfgName0;
+    while (getline(cfg_ifs, cfgName0)) {
+        cfgNameAll.push_back(cfgName0);
+    }
+    cfg_ifs.close();
+
+    for (auto & cfgName : cfgNameAll) {
+        // 单个场景
+        string cfgPath0 = rootPath + configPath + cfgName;//cfgName
+        LPCTSTR cfgPath = cfgPath0.c_str();
+
+        // 多个模型
+
+        LPSTR  modelNumCh = new char[1024];
+        GetPrivateProfileString("MODELS", "NUMBER", "NULL", modelNumCh, 512, cfgPath);
+        int modelNum = atoi(modelNumCh);
+        string modelKey, modelGTKey;
+        for (int i = 0; i < modelNum; i++) {
+            modelKey = "MODEL_" + to_string(i);
+            modelGTKey = modelKey + "_GROUNDTRUTH";
+
+
+            // 单个模型
+            // read mdoel
+            LPSTR  modelPath0 = new char[1024];
+            GetPrivateProfileString("MODELS", modelKey.c_str(), "NULL", modelPath0, 512, cfgPath);
+            string mPath1 = rootPath + modelPath0;
+
+            string modelNameInCfg;
+            {
+                std::vector<std::string> mStr, mn;
+                boost::split(mStr, mPath1, boost::is_any_of("/"));
+                boost::split(mn, *(mStr.end() - 1), boost::is_any_of("."));
+                modelNameInCfg = mn[0];
+            }
+
+
+            string mPath = mPath1.substr(0, mPath1.length() - 4) + "_0.ply";
+            Mat pc = loadPLYSimple(mPath.c_str(), 1);
+            Vec3f p1(pc.ptr<float>(0));
+
+
+            // read gt 
+            LPSTR  gtPath0 = new char[1024];
+            GetPrivateProfileString("MODELS", modelGTKey.c_str(), "NULL", gtPath0, 512, cfgPath);
+            string gtPath = rootPath + gtPath0;
+            string gtName;
+            {
+                std::vector<std::string> mStr, mn;
+                boost::split(mStr, gtPath0, boost::is_any_of("/"));
+                boost::split(mn, *(mStr.end() - 1), boost::is_any_of("."));
+                gtName = mn[0];
+            }
+
+            ifstream gt_ifs(gtPath);
+            if (!gt_ifs.is_open()) { cout << "not open: " << gtPath << endl; exit(1); }
+            Matx44d gt_pose;
+            for (int ii = 0; ii < 4; ii++)
+                for (int jj = 0; jj < 4; jj++)
+                {
+                    gt_ifs >> gt_pose(ii, jj);
+                }
+            gt_ifs.close();
+
+            // read pred
+            string predFilePath = predPath + gtName + ".txt";
+            ifstream pred_ifs(predFilePath);
+            if (!pred_ifs.is_open()) exit(1);
+
+            string modelNameInPred;
+            getline(pred_ifs, modelNameInPred); ////////
+            if (modelNameInPred != modelNameInCfg) { cout << "not same: " << "gt " << gtPath << "pred " << predFilePath << endl; exit(1); }
+            string timeStr;
+            getline(pred_ifs, timeStr);
+            int n = timeStr.find("=");
+            string timeStr2 = timeStr.substr(n + 1, timeStr.length() - n);
+            //cout << timeStr2 << endl;
+            double time = stod(timeStr2, 0);
+            timeMap[modelNameInPred].push_back(time);
+
+            Matx44d pred_pose;
+            for (int ii = 0; ii < 4; ii++)
+                for (int jj = 0; jj < 4; jj++)
+                {
+                    pred_ifs >> pred_pose(ii, jj);
+                }
+            pred_ifs.close();
+
+            // ADD
+            Mat pct_gt = transformPCPose(pc, gt_pose); //pc是原始模型
+            Mat pct_pred = transformPCPose(pc, pred_pose); //pc是原始模型
+
+            double totalD = 0;
+            for (int ii = 0; ii < pct_gt.rows; ii++)
+            {
+                Vec3f v1(pct_gt.ptr<float>(ii));
+                //const Vec3f n1(pct_gt.ptr<float>(ii) + 3);
+                Vec3f v2(pct_pred.ptr<float>(ii));
+                v1 = v1 - v2;
+                totalD += cv::norm(v1);
+            }
+            totalD /= pct_gt.rows;
+            ADDMap[modelNameInCfg].push_back(totalD);
+
+            // manifold 
+            Eigen::Matrix<double, 4, 4> gtMatrix;
+            cv::cv2eigen(gt_pose, gtMatrix); // cv::Mat 转换成 Eigen::Matrix
+            Eigen::Affine3f gtPose;
+            gtPose.matrix() = gtMatrix.cast<float>();
+            //cout << gtPose.rotation() << endl;
+            //cout << gtPose.translation() << endl;
+
+            Eigen::Matrix<double, 4, 4> predMatrix;
+            cv::cv2eigen(pred_pose, predMatrix); // cv::Mat 转换成 Eigen::Matrix
+            Eigen::Affine3f predPose;
+            predPose.matrix() = predMatrix.cast<float>();
+
+            Eigen::Matrix3f RtRsInv(gtPose.rotation().inverse().lazyProduct(predPose.rotation()).eval());
+            Eigen::AngleAxisf rotation_diff_mat(RtRsInv); //tr(Rs.inv * Rt) = tr(Rt * Rs.inv)
+            double phi = std::abs(rotation_diff_mat.angle());
+            float dNorm = (gtPose.translation() - predPose.translation()).norm();
+            phiMap[modelNameInCfg].push_back(phi);
+            dNormMap[modelNameInCfg].push_back(dNorm);
+        }
     }
 
-    // 单个模型
-    // read mdoel
-    LPSTR  modelPath0 = new char[1024];
-    GetPrivateProfileString("MODELS", modelKey.c_str(), "NULL", modelPath0, 512, cfgPath);
-    string mPath1 = rootPath + modelPath0;
 
-    string mPath = mPath1.substr(0, mPath1.length()-4) + "_0.ply";
-    Mat pc = loadPLYSimple(mPath.c_str(), 1);
-    Vec3f p1(pc.ptr<float>(0));
+    // 保存误差结果
+    writeMap(ADDMap, ADDName);
+    writeMap(phiMap, phiName);
+    writeMap(dNormMap, dNormName);
+    writeMap(timeMap, timeName);
     
-
-    // read gt 
-    LPSTR  gtPath0 = new char[1024];
-    GetPrivateProfileString("MODELS", modelGTKey.c_str(), "NULL", gtPath0, 512, cfgPath);
-    string gtPath = rootPath + gtPath0;
-
-    std::vector<std::string> mStr, mn;
-    boost::split(mStr, gtPath0, boost::is_any_of("/"));
-    boost::split(mn, *(mStr.end() - 1), boost::is_any_of("."));
-    string gtName = mn[0];
-
-    ifstream gt_ifs(gtPath);
-    if (!gt_ifs.is_open()) exit(1);
-    Matx44d gt_pose;
-    for (int ii = 0; ii < 4; ii++)
-        for (int jj = 0; jj < 4; jj++)
-        {
-            gt_ifs >> gt_pose(ii, jj);
-        }
-
-    // read pred
-    string predFilePath = predPath + gtName + ".txt";
-    ifstream pred_ifs(predFilePath);
-    if (!pred_ifs.is_open()) exit(1);
-
-    string modelName;
-    getline(pred_ifs, modelName);
-    string timeStr;
-    getline(pred_ifs, timeStr);
-    int n = timeStr.find("=");
-    string timeStr2 = timeStr.substr(n + 1, timeStr.length() - n);
-    cout << timeStr2 << endl;
-    double time = stod(timeStr2, 0);
-    Matx44d pred_pose;
-    for (int ii = 0; ii < 4; ii++)
-        for (int jj = 0; jj < 4; jj++)
-        {
-            pred_ifs >> pred_pose(ii, jj);
-        }
-
-
-    // ADD
-    Mat pct_gt = transformPCPose(pc, gt_pose); //pc是原始模型
-    Mat pct_pred = transformPCPose(pc, pred_pose); //pc是原始模型
-
-    double totalD = 0;
-    for (int ii = 0; ii < pct_gt.rows; ii++)
-    {
-        Vec3f v1(pct_gt.ptr<float>(ii));
-        //const Vec3f n1(pct_gt.ptr<float>(ii) + 3);
-        Vec3f v2(pct_pred.ptr<float>(ii));
-        v1 = v1 - v2;
-        totalD += cv::norm(v1);
+    int instancesNum(0);
+    for (auto it = ADDMap.begin(); it != ADDMap.end(); ++it) {
+        instancesNum += it->second.size();
+        cout << it->first << ": " << it->second.size() << endl;
     }
-    totalD /= pct_gt.rows;
-
-    // manifold 
-    Eigen::Matrix<double, 4, 4> gtMatrix;
-    cv::cv2eigen(gt_pose, gtMatrix); // cv::Mat 转换成 Eigen::Matrix
-    Eigen::Affine3f gtPose;
-    gtPose.matrix() = gtMatrix.cast<float>();
-    //cout << gtPose.rotation() << endl;
-    //cout << gtPose.translation() << endl;
-
-    
-
-    Eigen::Matrix<double, 4, 4> predMatrix;
-    cv::cv2eigen(pred_pose, predMatrix); // cv::Mat 转换成 Eigen::Matrix
-    Eigen::Affine3f predPose;
-    predPose.matrix() = predMatrix.cast<float>();
-
-    Eigen::Matrix3f RtRsInv(gtPose.rotation().inverse().lazyProduct(predPose.rotation()).eval());
-    Eigen::AngleAxisf rotation_diff_mat(RtRsInv); //tr(Rs.inv * Rt) = tr(Rt * Rs.inv)
-    double phi = std::abs(rotation_diff_mat.angle());
-    float dNorm = (gtPose.translation() - predPose.translation()).norm();
+    cout <<  "Total: " << instancesNum << endl;  //188
 
 
     return 0;
@@ -140,6 +200,60 @@ void evalKinect() {
     string rePath = "D:/wenhao.sun/Documents/GitHub/1-project/Halcon_benchmark/halconResults/kinect/";
 
 
+}
+
+int rateUwa() {
+    cout << "rate UWA" << endl;
+    string dataName = "UWA";
+
+    string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/UWA/";
+    string configPath = "3D models/Mian/";
+    string predPath = "D:/wenhao.sun/Documents/GitHub/1-project/Halcon_benchmark/halconResults/uwa/";
+
+    vector<string> uwaModelName{ "parasaurolophus_high", "cheff", "chicken_high", "T-rex_high" };
+    //cout << uwaModelName[0] << endl;
+    map< string, vector<double>> ADDMap;
+    map< string, vector<double>> phiMap;
+    map< string, vector<double>> dNormMap;
+    map< string, vector<double>> timeMap;
+    for (int i = 0; i < uwaModelName.size(); i++) {
+        ADDMap[uwaModelName[i]] = vector<double>();
+        phiMap[uwaModelName[i]] = vector<double>();
+        dNormMap[uwaModelName[i]] = vector<double>();
+        timeMap[uwaModelName[i]] = vector<double>();
+    }
+    string ADDName = "../eval_" + dataName + (string)"/eval_ADD.txt";
+    string phiName = "../eval_" + dataName + (string)"/eval_phi.txt";
+    string dNormName = "../eval_" + dataName + (string)"/eval_dNorm.txt";
+    string timeName = "../eval_" + dataName + (string)"/eval_time.txt";
+
+    readMap(ADDMap, ADDName);
+    readMap(phiMap, phiName);
+    readMap(dNormMap, dNormName);
+    readMap(timeMap, timeName);
+
+    Vector3d v1 = results[modle_id][0].Pose.block(0, 0, 3, 3)
+        * detectortest.model_para.model[modle_id].model_center + results[modle_id][0].Pose.block(0, 3, 3, 1);
+    Vector3d v2 = tpose.block(0, 0, 3, 3)
+        * detectortest.model_para.model[modle_id].model_center + tpose.block(0, 3, 3, 1);
+
+    int yn = 1;
+    if ((v1 - v2).norm() > detectortest.model_para.model[modle_id].model_diameter * 0.1 ||
+        totald / pct1.rows() > detectortest.model_para.model[modle_id].model_diameter * 0.1)
+        yn = 0;
+
+    int yn2 = 1;
+    if ((v1 - v2).norm() > detectortest.model_para.model[modle_id].model_diameter * 0.2 ||
+        totald / pct1.rows() > detectortest.model_para.model[modle_id].model_diameter * 0.2)
+        yn2 = 0;
+
+    int yn3 = 1;
+    if ((v1 - v2).norm() > detectortest.model_para.model[modle_id].model_diameter * 0.3 ||
+        totald / pct1.rows() > detectortest.model_para.model[modle_id].model_diameter * 0.3)
+        yn3 = 0;
+
+
+    return 0;
 }
 
 int main() {
@@ -155,7 +269,12 @@ int main() {
         cout << "Running without OpenMP and without TBB" << endl;
     #endif
 
-    evalUwa();
+    //evalUwa();
+        rateUwa();
+
+    
+        //writeMap();
+        //readMap();
 }
 
 int main2(){
@@ -215,4 +334,36 @@ int main1(int argc, char** argv)
 
     return 0;
     
+}
+
+
+int writeMap(const map<string, vector<double>> & m, const string & outPath) {
+    //map<string, vector<double>> m = { {"1th", vector<double>{0,1,2}} , {"2th", vector<double>{0,1,2}} };
+    // 存入文件out.txt
+    ofstream of(outPath);
+    for (const auto& i : m) {
+        of << i.first << ' ';
+        for (auto & v: i.second)
+            of << v << ' ';
+        of << std::endl;
+
+    }
+    of.close();
+    return 0;
+}
+
+int readMap(map<string, vector<double>>& m2, const string& inPath) {
+    // 读取文件，存入map m2中
+    //map<string, vector<double>> m2;
+    ifstream iff (inPath);
+    if (!iff.is_open()) { cout << "not open: " << inPath << endl; exit(1); }
+    string keyval;
+    while (getline(iff, keyval)) {
+        std::vector<std::string> mStr;
+        boost::split(mStr, keyval, boost::is_any_of(" "));
+        for (int i = 1; i < mStr.size()-1; i++)
+            m2[mStr[0]].push_back(stod(mStr[i]));
+    }
+    iff.close();
+    return 0;
 }
