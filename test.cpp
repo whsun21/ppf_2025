@@ -5,6 +5,10 @@
 #include "surface_matching/ppf_helpers.hpp"
 #include "opencv2/core/utility.hpp"
 #include "src/c_utils.hpp"
+//#include "src/precomp.hpp"
+//#include "opencv2/flann/matrix.h" 
+#include "flann/flann.hpp"
+#include "flann/algorithms/dist.h"
 
 #include <Windows.h>
 #include <fstream>
@@ -18,8 +22,16 @@ using namespace std;
 using namespace cv;
 using namespace ppf_match_3d;
 
+typedef flann::Index<flann::L2<float> > KDTree;
+
+
 int writeMap(const map<string, vector<double>> & m, const string & outPath);
+int writeMap(const map<string, double>& m, const string& outPath);
 int readMap(map<string, vector<double>>& m2, const string& inPath);
+int readMap(map<string, double>& m2, const string& inPath);
+void SearchKDTree(KDTree* tree, const Mat& input, std::vector<std::vector<int>>& indices, std::vector<std::vector<float>>& dists, int nn);
+KDTree* BuildKDTree(const  Mat& data);
+
 
 int evalUwa() {
     cout << "eval UWA" << endl;
@@ -28,23 +40,60 @@ int evalUwa() {
     string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/UWA/";
     string configPath = "3D models/Mian/";
     string predPath = "D:/wenhao.sun/Documents/GitHub/1-project/Halcon_benchmark/halconResults/uwa/";
+    string modelPath = rootPath + configPath;
 
     vector<string> uwaModelName{ "parasaurolophus_high", "cheff", "chicken_high", "T-rex_high" };
     //cout << uwaModelName[0] << endl;
     map< string, vector<double>> ADDMap;
+    map< string, vector<double>> ADIMap;
+    map< string, vector<double>> centerErrorMap;
     map< string, vector<double>> phiMap;
     map< string, vector<double>> dNormMap;
     map< string, vector<double>> timeMap;
+    map< string, vector<double>> occulsionMap;
+
     for (int i = 0; i < uwaModelName.size(); i++) {
         ADDMap[uwaModelName[i]] = vector<double>();
+        ADIMap[uwaModelName[i]] = vector<double>();
+        centerErrorMap[uwaModelName[i]] = vector<double>();
         phiMap[uwaModelName[i]] = vector<double>();
         dNormMap[uwaModelName[i]] = vector<double>();
         timeMap[uwaModelName[i]] = vector<double>();
+        occulsionMap[uwaModelName[i]] = vector<double>();
     }
-    string ADDName = "../eval_"+ dataName + (string)"/eval_ADD.txt";
+    string ADDName = "../eval_" + dataName + (string)"/eval_ADD.txt";
+    string ADIName = "../eval_" + dataName + (string)"/eval_ADI.txt";
+    string centerErrorName = "../eval_"+ dataName + (string)"/eval_centerError.txt";
     string phiName = "../eval_" + dataName + (string)"/eval_phi.txt";
     string dNormName = "../eval_" + dataName + (string)"/eval_dNorm.txt";
     string timeName = "../eval_" + dataName + (string)"/eval_time.txt";
+    string occulsionName = "../eval_" + dataName + (string)"/eval_occulsion.txt";
+
+    // 计算直径, center point
+    map<string, double> Diamters;
+    map<string, Vec3f> Centers;
+    map<string, Mat> modelPC;
+    string modelFilePath;
+    for (int i = 0; i < uwaModelName.size(); i++) {
+        modelFilePath = modelPath + uwaModelName[i] + "_0.ply";
+        Mat pc = loadPLYSimple(modelFilePath.c_str(), 1);
+        modelPC[uwaModelName[i]] = pc;
+        Vec2f xRange, yRange, zRange;
+        computeBboxStd(pc, xRange, yRange, zRange);
+        float dx = xRange[1] - xRange[0];
+        float dy = yRange[1] - yRange[0];
+        float dz = zRange[1] - zRange[0];
+        float diameter = sqrt(dx * dx + dy * dy + dz * dz);
+        Diamters[uwaModelName[i]] = diameter;
+
+        Vec3f center;
+        center[0] = (xRange[1] + xRange[0]) / 2;
+        center[1] = (yRange[1] + yRange[0]) / 2;
+        center[2] = (zRange[1] + zRange[0]) / 2;
+        Centers[uwaModelName[i]] = center;
+    }
+    string DiamtersName = "../eval_" + dataName + (string)"/eval_Diamters.txt";
+
 
     // 所有场景
     string cfgsFile = rootPath + configPath + "configFilesList.txt";
@@ -56,7 +105,9 @@ int evalUwa() {
     }
     cfg_ifs.close();
 
-    for (auto & cfgName : cfgNameAll) {
+    for (int icfg = 0; icfg < cfgNameAll.size(); icfg++) {
+    //for (int icfg = 0; icfg < 1; icfg++) {
+        auto& cfgName = cfgNameAll[icfg];
         // 单个场景
         string cfgPath0 = rootPath + configPath + cfgName;//cfgName
         LPCTSTR cfgPath = cfgPath0.c_str();
@@ -66,11 +117,11 @@ int evalUwa() {
         LPSTR  modelNumCh = new char[1024];
         GetPrivateProfileString("MODELS", "NUMBER", "NULL", modelNumCh, 512, cfgPath);
         int modelNum = atoi(modelNumCh);
-        string modelKey, modelGTKey;
+        string modelKey, modelGTKey, modelOccluKey;
         for (int i = 0; i < modelNum; i++) {
             modelKey = "MODEL_" + to_string(i);
             modelGTKey = modelKey + "_GROUNDTRUTH";
-
+            modelOccluKey = modelKey + "_OCCLUSION";
 
             // 单个模型
             // read mdoel
@@ -87,9 +138,9 @@ int evalUwa() {
             }
 
 
-            string mPath = mPath1.substr(0, mPath1.length() - 4) + "_0.ply";
-            Mat pc = loadPLYSimple(mPath.c_str(), 1);
-            Vec3f p1(pc.ptr<float>(0));
+            //string mPath = mPath1.substr(0, mPath1.length() - 4) + "_0.ply";
+            //Mat pc = loadPLYSimple(mPath.c_str(), 1);
+            //Vec3f p1(pc.ptr<float>(0));
 
 
             // read gt 
@@ -113,6 +164,7 @@ int evalUwa() {
                     gt_ifs >> gt_pose(ii, jj);
                 }
             gt_ifs.close();
+
 
             // read pred
             string predFilePath = predPath + gtName + ".txt";
@@ -138,22 +190,68 @@ int evalUwa() {
                 }
             pred_ifs.close();
 
+            // read occulsion
+            LPSTR  occlu = new char[1024];
+            GetPrivateProfileString("MODELS", modelOccluKey.c_str(), "NULL", occlu, 512, cfgPath);
+            string occlus = occlu;
+            double occlud = stod(occlus); 
+            occulsionMap[modelNameInPred].push_back(occlud);
+
             // ADD
+            Mat& pc = modelPC[modelNameInPred];
             Mat pct_gt = transformPCPose(pc, gt_pose); //pc是原始模型
             Mat pct_pred = transformPCPose(pc, pred_pose); //pc是原始模型
 
-            double totalD = 0;
+            double totalD_ADD = 0;
             for (int ii = 0; ii < pct_gt.rows; ii++)
             {
                 Vec3f v1(pct_gt.ptr<float>(ii));
                 //const Vec3f n1(pct_gt.ptr<float>(ii) + 3);
                 Vec3f v2(pct_pred.ptr<float>(ii));
                 v1 = v1 - v2;
-                totalD += cv::norm(v1);
+                totalD_ADD += cv::norm(v1);
             }
-            totalD /= pct_gt.rows;
-            ADDMap[modelNameInCfg].push_back(totalD);
+            totalD_ADD /= pct_gt.rows;
+            ADDMap[modelNameInCfg].push_back(totalD_ADD);
 
+            // ADI
+            Mat features;
+            Mat queries;
+            pct_gt.colRange(0, 3).copyTo(features);
+            pct_pred.colRange(0, 3).copyTo(queries);
+
+            //cout << pc.at<float>(0, 0) << pc.at<float>(0, 1) << pc.at<float>(0, 2) << endl;
+
+            KDTree* model_tree = BuildKDTree(features);
+            std::vector<std::vector<int>> indices;
+            std::vector<std::vector<float>> dists;
+            SearchKDTree(model_tree, queries, indices, dists, 1);
+            delete model_tree;
+            double totalD_ADI = 0;
+            for (int ii = 0; ii < queries.rows; ii++)
+            {
+                totalD_ADI += sqrt(dists[ii][0]);
+            }
+            totalD_ADI /= queries.rows;
+            ADIMap[modelNameInCfg].push_back(totalD_ADI);
+
+            //centerError
+            Vec3f centerV = Centers[modelNameInCfg];
+            Mat center = Mat(1, centerV.rows, CV_32F);
+            float* pcData = center.ptr<float>(0);
+            pcData[0] = (float)centerV[0];
+            pcData[1] = (float)centerV[1];
+            pcData[2] = (float)centerV[2];
+
+            //cout << center.row(0) << endl;
+            Mat ctt_gt = transformPCPose(center, gt_pose); //pc是原始模型
+            Mat ctt_pred = transformPCPose(center, pred_pose); //pc是原始模型
+            Vec3f cd = ctt_gt.at<Vec3f>(0) - ctt_pred.at<Vec3f>(0);
+            //cout << ctt_gt.at<Vec3f>(0) << endl;
+            //cout << ctt_pred.at<Vec3f>(0) << endl;
+            //cout << cd << endl;
+            centerErrorMap[modelNameInCfg].push_back(cv::norm(cd));
+            
             // manifold 
             Eigen::Matrix<double, 4, 4> gtMatrix;
             cv::cv2eigen(gt_pose, gtMatrix); // cv::Mat 转换成 Eigen::Matrix
@@ -179,9 +277,13 @@ int evalUwa() {
 
     // 保存误差结果
     writeMap(ADDMap, ADDName);
+    writeMap(ADIMap, ADIName);
+    writeMap(centerErrorMap, centerErrorName);
     writeMap(phiMap, phiName);
     writeMap(dNormMap, dNormName);
     writeMap(timeMap, timeName);
+    writeMap(occulsionMap, occulsionName);
+    writeMap(Diamters, DiamtersName);
     
     int instancesNum(0);
     for (auto it = ADDMap.begin(); it != ADDMap.end(); ++it) {
@@ -213,44 +315,134 @@ int rateUwa() {
     vector<string> uwaModelName{ "parasaurolophus_high", "cheff", "chicken_high", "T-rex_high" };
     //cout << uwaModelName[0] << endl;
     map< string, vector<double>> ADDMap;
+    map< string, vector<double>> ADIMap;
+    map< string, vector<double>> centerErrorMap;
     map< string, vector<double>> phiMap;
     map< string, vector<double>> dNormMap;
     map< string, vector<double>> timeMap;
+    map< string, vector<double>> occulsionMap;
+    map<string, int> tpADD;
+    map<string, int> tpADICenter;
+    map<string, int> tpManifold;
+    map<string, int> tpManifoldLowOccul;
+    map<string, int> lowOcculNum;
+    map<string, double> rateADD;
+    map<string, double> rateADICenter;
+    map<string, double> rateManifold;
+    map<string, double> Diamters;
+
     for (int i = 0; i < uwaModelName.size(); i++) {
-        ADDMap[uwaModelName[i]] = vector<double>();
-        phiMap[uwaModelName[i]] = vector<double>();
-        dNormMap[uwaModelName[i]] = vector<double>();
-        timeMap[uwaModelName[i]] = vector<double>();
+        //ADDMap[uwaModelName[i]] = vector<double>();
+        //phiMap[uwaModelName[i]] = vector<double>();
+        //dNormMap[uwaModelName[i]] = vector<double>();
+        //timeMap[uwaModelName[i]] = vector<double>();
+        tpADD[uwaModelName[i]] = 0;
+        tpADICenter[uwaModelName[i]] = 0;
+        tpManifold[uwaModelName[i]] = 0;
+        tpManifoldLowOccul[uwaModelName[i]] = 0;
+        lowOcculNum[uwaModelName[i]] = 0;
+        rateADD[uwaModelName[i]] = 0;
+        rateADICenter[uwaModelName[i]] = 0;
+        rateManifold[uwaModelName[i]] = 0;
     }
     string ADDName = "../eval_" + dataName + (string)"/eval_ADD.txt";
+    string ADIName = "../eval_" + dataName + (string)"/eval_ADI.txt";
+    string centerErrorName = "../eval_" + dataName + (string)"/eval_centerError.txt";
     string phiName = "../eval_" + dataName + (string)"/eval_phi.txt";
     string dNormName = "../eval_" + dataName + (string)"/eval_dNorm.txt";
     string timeName = "../eval_" + dataName + (string)"/eval_time.txt";
+    string DiamtersName = "../eval_" + dataName + (string)"/eval_Diamters.txt";
+    string occulsionName = "../eval_" + dataName + (string)"/eval_occulsion.txt";
 
     readMap(ADDMap, ADDName);
+    readMap(ADIMap, ADIName);
     readMap(phiMap, phiName);
     readMap(dNormMap, dNormName);
     readMap(timeMap, timeName);
+    readMap(occulsionMap, occulsionName);
 
-    Vector3d v1 = results[modle_id][0].Pose.block(0, 0, 3, 3)
-        * detectortest.model_para.model[modle_id].model_center + results[modle_id][0].Pose.block(0, 3, 3, 1);
-    Vector3d v2 = tpose.block(0, 0, 3, 3)
-        * detectortest.model_para.model[modle_id].model_center + tpose.block(0, 3, 3, 1);
+    readMap(centerErrorMap, centerErrorName);
+    readMap(Diamters, DiamtersName);
 
-    int yn = 1;
-    if ((v1 - v2).norm() > detectortest.model_para.model[modle_id].model_diameter * 0.1 ||
-        totald / pct1.rows() > detectortest.model_para.model[modle_id].model_diameter * 0.1)
-        yn = 0;
 
-    int yn2 = 1;
-    if ((v1 - v2).norm() > detectortest.model_para.model[modle_id].model_diameter * 0.2 ||
-        totald / pct1.rows() > detectortest.model_para.model[modle_id].model_diameter * 0.2)
-        yn2 = 0;
+    //// threshold 
+    //vector<double> ADDthres(3);
+    //ADDthres[0] = 0.1;
+    //ADDthres[1] = 0.2;
+    //ADDthres[2] = 0.3;
+    double AD_scale = 0.1;
+    double manifold_pos_scale = 0.1;
 
-    int yn3 = 1;
-    if ((v1 - v2).norm() > detectortest.model_para.model[modle_id].model_diameter * 0.3 ||
-        totald / pct1.rows() > detectortest.model_para.model[modle_id].model_diameter * 0.3)
-        yn3 = 0;
+    int allInstNum = 0;
+    int allTpMfldNum = 0;
+    int allLowOcculNum = 0;
+    int allTpMfldLowOcculNum = 0;
+    double occluThre = 0.84;
+
+    for (int modelIndex = 0; modelIndex < uwaModelName.size(); modelIndex++) {
+
+        string ModelName = uwaModelName[modelIndex];
+        int instanceNum = ADDMap[ModelName].size();
+    
+        //rate ADD
+        double ADDthres = AD_scale * Diamters[ModelName]; ///thres
+        for (int insIndex = 0; insIndex < instanceNum; insIndex++) {
+            double ADDError = ADDMap[ModelName][insIndex];
+            if (ADDError < ADDthres) { ///////////////////////////
+                tpADD[ModelName] += 1;
+            }
+        }
+        rateADD[ModelName] = ( double)tpADD[ModelName] / (double)instanceNum;
+        //cout << " rateADD: " <<  tpADD[ModelName] << " / " << instanceNum << " = " << rateADD[ModelName] << "          " << ModelName << endl;
+    
+        //rate ADI
+        double ADICenterthres = AD_scale * Diamters[ModelName]; ///thres
+
+        for (int insIndex = 0; insIndex < instanceNum; insIndex++) {
+            double ADIError = ADIMap[ModelName][insIndex];
+            double centerError = centerErrorMap[ModelName][insIndex];
+            if (max(ADIError, centerError) < ADICenterthres) { ///////////////////////////
+                tpADICenter[ModelName] += 1;
+            }
+        }
+        rateADICenter[ModelName] = (double)tpADICenter[ModelName] / (double)instanceNum;
+        //cout  << " rateADICenter: " <<  tpADICenter[ModelName] << " / " << instanceNum << " = " << rateADICenter[ModelName] << "          " << ModelName << endl;
+
+        //rate manifold
+        double position_thres = manifold_pos_scale * Diamters[ModelName];
+        double radius_thres = 2 * M_PI / 30;
+        int lowOccul = 0;
+        for (int insIndex = 0; insIndex < instanceNum; insIndex++) {
+            double phiError = phiMap[ModelName][insIndex];
+            double dNormError = dNormMap[ModelName][insIndex];
+            double occlu = occulsionMap[ModelName][insIndex];
+            if (phiError < radius_thres && dNormError < position_thres) { ///////////////////////////
+                tpManifold[ModelName] += 1;
+            }
+            if (occlu <= occluThre) {
+                lowOcculNum[ModelName] += 1;
+                if (phiError < radius_thres && dNormError < position_thres) { ///////////////////////////
+                    tpManifoldLowOccul[ModelName] += 1;
+                }
+            }
+
+        }
+        rateManifold[ModelName] = (double)tpManifold[ModelName] / (double)instanceNum;
+        cout  << " rateManifold: " << tpManifold[ModelName] << " / " << instanceNum << " = " << rateManifold[ModelName] << "          " << ModelName << endl;
+    
+        allInstNum += instanceNum;
+        allTpMfldNum += tpManifold[ModelName];
+
+        allLowOcculNum += lowOcculNum[ModelName];
+        allTpMfldLowOcculNum += tpManifoldLowOccul[ModelName];
+
+    }
+
+    // recognition rate of all objects; 
+    // Manifold
+    cout << "manifld" << endl;
+    cout << "recognition rate: " << allTpMfldNum << " / " << allInstNum << " = " << (double)allTpMfldNum / (double)allInstNum << endl;
+    cout << "recognition rate of all objs with less than 84% occlusion: " << allTpMfldLowOcculNum << " / " << allLowOcculNum << " = " << (double)allTpMfldLowOcculNum / (double)allLowOcculNum << endl;
 
 
     return 0;
@@ -270,11 +462,11 @@ int main() {
     #endif
 
     //evalUwa();
-        rateUwa();
+    rateUwa();
 
     
-        //writeMap();
-        //readMap();
+    //writeMap();
+    //readMap();
 }
 
 int main2(){
@@ -352,6 +544,17 @@ int writeMap(const map<string, vector<double>> & m, const string & outPath) {
     return 0;
 }
 
+int writeMap(const map<string, double>& m, const string& outPath) {
+    //map<string, vector<double>> m = { {"1th", vector<double>{0,1,2}} , {"2th", vector<double>{0,1,2}} };
+    // 存入文件out.txt
+    ofstream of(outPath);
+    for (const auto& i : m) {
+        of << i.first << ' ' << i.second << std::endl;
+    }
+    of.close();
+    return 0;
+}
+
 int readMap(map<string, vector<double>>& m2, const string& inPath) {
     // 读取文件，存入map m2中
     //map<string, vector<double>> m2;
@@ -366,4 +569,78 @@ int readMap(map<string, vector<double>>& m2, const string& inPath) {
     }
     iff.close();
     return 0;
+}
+
+int readMap(map<string, double>& m2, const string& inPath) {
+    // 读取文件，存入map m2中
+    //map<string, vector<double>> m2;
+    ifstream iff(inPath);
+    if (!iff.is_open()) { cout << "not open: " << inPath << endl; exit(1); }
+    string keyval;
+    while (getline(iff, keyval)) {
+        std::vector<std::string> mStr;
+        boost::split(mStr, keyval, boost::is_any_of(" "));
+        m2[mStr[0]] = stod(mStr[1]);
+    }
+    iff.close();
+    return 0;
+}
+
+KDTree* BuildKDTree(const  Mat& data)
+{
+    int rows, dim;
+    rows = (int)data.rows;
+    dim = (int)data.cols;
+    //std::cout << rows * dim  << " " << std::endl;
+    float* temp = new float[rows * dim];
+
+    flann::Matrix<float> dataset_mat(temp, rows, dim);
+    for (int i = 0; i < rows; i++)
+    {
+        for (int j = 0; j < dim; j++)
+        {
+            dataset_mat[i][j] = data.at<float>(i, j);
+            //std::cout << data(i, j) << "  ";
+        }
+        //std::cout << std::endl;
+    }
+
+    //KDTreeSingleIndexParams 为搜索最大叶子数
+    KDTree* tree = new KDTree(dataset_mat, flann::KDTreeSingleIndexParams(15));
+    tree->buildIndex();
+    //std::cout << "test..." << tree->size() << std::endl;
+    //tree = &temp_tree;
+    delete[] temp;
+
+    return tree;
+}
+
+void SearchKDTree(KDTree* tree, const Mat& input,
+    std::vector<std::vector<int>>& indices,
+    std::vector<std::vector<float>>& dists, int nn)
+{
+    int rows_t = input.rows;
+    int dim = input.cols;
+
+    float* temp = new float[rows_t * dim];
+    flann::Matrix<float> query_mat(temp, rows_t, dim);
+    for (int i = 0; i < rows_t; i++)
+    {
+        for (int j = 0; j < dim; j++)
+        {
+            query_mat[i][j] = input.at<float>(i, j);
+        }
+    }
+
+    indices.resize(rows_t);
+    dists.resize(rows_t);
+
+    for (int i = 0; i < rows_t; i++)
+    {
+        indices[i].resize(nn);
+        dists[i].resize(nn);
+    }
+
+    tree->knnSearch(query_mat, indices, dists, nn, flann::SearchParams(128));
+    delete[] temp;
 }
