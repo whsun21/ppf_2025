@@ -38,7 +38,7 @@ link_directories(${PROJECT_SOURCE_DIR}/lib/yaml-cpp)
 # add_executable(${PROJECT_NAME} main.cpp)
 # target_include_directories(${PROJECT_NAME} PUBLIC ${PROJECT_SOURCE_DIR}/include) 
 
-include_directories(${PCL_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS} include include/vcglib)
+include_directories(${PCL_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS} include include/_deps include/vcglib)
 link_directories(${PCL_LIBRARY_DIRS} ${OpenCV_LIBRARY_DIRS} ${Boost_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS} ${OpenCV_DEFINITIONS} ${Boost_DEFINITIONS}) 
 
@@ -55,17 +55,28 @@ add_library(t_hash_int src/t_hash_int.cpp)
 target_link_libraries(t_hash_int ${OpenCV_LIBRARIES})
 
 add_library(ppf_match_3d src/ppf_match_3d.cpp)
-target_link_libraries(ppf_match_3d ${OpenCV_LIBRARIES} pose_3d t_hash_int)
+target_link_libraries(ppf_match_3d ${OpenCV_LIBRARIES} pose_3d t_hash_int
+icp  sparse_icp)
+
+add_library(sparse_icp src/IcpOptimizer.cpp)
+target_link_libraries(sparse_icp )
+
 
 add_executable (ppf_2025_main ppf_2025_main.cpp)
 # target_link_libraries (ppf_main ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp yaml-cpp.a)
-target_link_libraries (ppf_2025_main PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp 
+target_link_libraries (ppf_2025_main PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp sparse_icp 
 debug yaml-cppd.lib 
 optimized  yaml-cpp.lib )
 
 add_executable (test test.cpp)
 # target_link_libraries (ppf_main ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp yaml-cpp.a)
-target_link_libraries (test PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp 
+target_link_libraries (test PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp  sparse_icp
+debug yaml-cppd.lib 
+optimized  yaml-cpp.lib )
+
+add_executable (benchmark benchmark.cpp)
+# target_link_libraries (ppf_main ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp yaml-cpp.a)
+target_link_libraries (benchmark PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp  sparse_icp
 debug yaml-cppd.lib 
 optimized  yaml-cpp.lib )
 

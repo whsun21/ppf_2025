@@ -172,7 +172,7 @@ Pose3DPtr Pose3D::clone()
 
 void Pose3D::printPose()
 {
-  printf("\n-- Pose to Model Index %d: NumVotes = %d, Residual = %f\n", (uint)this->modelIndex, (uint)this->numVotes, this->residual);
+  printf("\n-- Pose to Model Index %d: NumVotes = %d, Overlap = %f, Residual = %f\n", (uint)this->modelIndex, (uint)this->numVotes, this->overlap, this->residual);
   std::cout << this->pose << std::endl;
 }
 

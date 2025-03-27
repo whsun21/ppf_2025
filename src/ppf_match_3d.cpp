@@ -3,6 +3,12 @@
 
 #include "precomp.hpp"
 #include "hash_murmur.hpp"
+#include "Eigen/Dense"
+#include "Eigen/Core"
+#include <opencv2/core/eigen.hpp>
+#include "IcpOptimizer.h"
+using namespace Eigen;
+using namespace std;
 
 namespace cv
 {
@@ -17,6 +23,13 @@ static bool pose3DPtrCompare(const Pose3DPtr& a, const Pose3DPtr& b)
   CV_Assert(!a.empty() && !b.empty());
   return ( a->numVotes > b->numVotes );
 }
+
+static bool pose3DPtrCompareOverlap(const Pose3DPtr& a, const Pose3DPtr& b)
+{
+    CV_Assert(!a.empty() && !b.empty()); 
+    return (a->overlap > b->overlap);
+}
+
 
 static int sortPoseClusters(const PoseCluster3DPtr& a, const PoseCluster3DPtr& b)
 {
@@ -132,7 +145,7 @@ void PPF3DDetector::setSearchParams(const double positionThreshold, const double
     position_threshold = positionThreshold;
 
   if (rotationThreshold<0)
-    rotation_threshold = angle_step_radians;
+    rotation_threshold = ((360 / angle_step) / 180.0 * M_PI); // 有问题
   else
     rotation_threshold = rotationThreshold;
 
@@ -199,8 +212,19 @@ void PPF3DDetector::trainModel(const Mat &PC)
   float diameter = sqrt ( dx * dx + dy * dy + dz * dz );
 
   float distanceStep = (float)(diameter * sampling_step_relative);
+  //distanceStep /= 2;
 
-  Mat sampled = samplePCByQuantization(PC, xRange, yRange, zRange, (float)sampling_step_relative,0);
+  //Mat sampled0 = samplePCByQuantization(PC, xRange, yRange, zRange, (float)sampling_step_relative,0);
+  //writePLY(sampled0, "../samples/data/results/sampled_model0.ply");
+
+  //Mat sampled = samplePCByQuantization_normal(PC, xRange, yRange, zRange, distanceStep, 15.0 / 180 * 3.1415, 3);
+  
+  Mat sampled = samplePCByQuantization_cube(PC, xRange, yRange, zRange, distanceStep, 0);
+  writePLY(sampled, "../samples/data/results/sampled_model.ply");
+
+  float distanceStepRefine = (float)(diameter * 0.01);
+  Mat sampledRefinement = samplePCByQuantization_cube(PC, xRange, yRange, zRange, distanceStepRefine, 0);
+  writePLY(sampledRefinement, "../samples/data/results/sampled_model_refine.ply");
 
   int size = sampled.rows*sampled.rows;
 
@@ -255,6 +279,8 @@ void PPF3DDetector::trainModel(const Mat &PC)
       }
     }
   }
+  setSearchParams(diameter / 10.0, angle_step_radians, false);  //作者建议位移阈值diam（M ）/10
+  //setSearchParams(distanceStep, angle_step_radians, false);  //作者建议位移阈值diam（M ）/10
 
   angle_step = angle_step_radians;
   distance_step = distanceStep;
@@ -262,24 +288,219 @@ void PPF3DDetector::trainModel(const Mat &PC)
   num_ref_points = numRefPoints;
   sampled_pc = sampled;
   trained = true;
-  setSearchParams(distanceStep, angle_step_radians, false);
 
+  //
+  model_diameter = diameter;
+  sampled_pc_refinement = sampledRefinement;
 }
 
 
 
 ///////////////////////// MATCHING ////////////////////////////////////////
 
+/*
+void PPF3DDetector::overlapRatio(std::vector<Pose3DPtr>& results, double threshold, double  anglethreshold)
+{
+    double thresholdlen = threshold * model_diameter;
+    MatrixXf samplecood(sampled_pc.rows(), 3);//sampled_pc采样后的模型
+    samplecood = sampled_pc.block(0, 0, sampled_pc.rows(), 3);
+
+
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) 
+#endif
+    for (int i = 0; i < results.size(); i++)
+    {
+        MatrixXf pct = transformPose3f(samplecood, results[i].Pose);
+        std::vector<std::vector<int>> indices;
+        std::vector<std::vector<float>> dists;
+        SearchKDTree(scene_knn_tree, pct, indices, dists, 1);
+        //int pointnum = 0;
+        int pointnum2 = 0;
+        //VectorXi num(sampled_scene.rows());
+        //VectorXi num2(sampled_scene.rows());
+        //num.setZero();
+        //num2.setZero();
+        //MatrixXf curv(sampled_pc.rows(), 2);
+
+        for (int j = 0; j < sampled_pc.rows(); j++)
+        {
+
+            if (dists[j][0] < thresholdlen)
+            {
+                //num2(indices[j][0]) = 1;
+                pointnum2++;
+
+
+            }
+
+        }
+        //results[i].overlap = num.sum();
+        //results[i].overnum = pointnum2 ;
+
+        results[i].overlap = 1.0 * pointnum2 / sampled_pc.rows();
+        //	cout << pointnum << "  " << pointnum*1.0/pointnum2  << "  " << 1.0*pointnum2 / sampled_pc.rows() << endl;
+
+    }
+
+    //std::sort(results.begin(),results.end(), pose3DPtrCompareoverlapS);//排序算法 对姿态按投票数排序 测试用
+
+}*/
+
+void PPF3DDetector::overlapRatio(const Mat& srcPC, const Mat& dstPC, void* dstFlann, std::vector<Pose3DPtr>& resultsS, double threshold, double anglethreshold)
+{
+    double thresholdlen = threshold ;
+    thresholdlen = thresholdlen * thresholdlen;
+
+    double angle = -1.01;
+    if (anglethreshold < 180)
+        angle = cos(anglethreshold / 180 * M_PI);
+
+#ifdef _OPENMP
+#pragma omp parallel for 
+#endif
+
+    for (int i = 0; i < resultsS.size(); i++) {
+        Mat srcMoved = transformPCPose(srcPC, resultsS[i]->pose);
+
+        size_t numElSrc = (size_t)srcPC.rows;
+        int sizesResult[2] = { (int)numElSrc, 1 };
+        float* distances = new float[numElSrc];
+        int* indices = new int[numElSrc];
+
+        Mat Indices(2, sizesResult, CV_32S, indices, 0);
+        Mat Distances(2, sizesResult, CV_32F, distances, 0);
+
+        queryPCFlann(dstFlann, srcMoved, Indices, Distances);
+
+        int pointNum = 0;
+        for (int j = 0; j < numElSrc; j++)
+        {
+            const Vec3f n1(srcMoved.ptr<float>(j) + 3);
+            int sceneInd = Indices.at<int>(j);
+            const Vec3f n2(dstPC.ptr<float>(sceneInd) + 3);
+
+            double a = n1.dot(n2);
+
+            if (Distances.at<float>(j) < thresholdlen)
+            {
+                if (a > angle)
+                {
+                    pointNum++;// sumnum_model(j);
+                }
+            }
+        }
+        resultsS[i]->overlap = 1.0 * pointNum / numElSrc;
+
+        delete[] distances;
+        delete[] indices;
+    }
+}
+
+void  PPF3DDetector::SparseICP(std::vector<Pose3DPtr>& resultsS, Mat& srcPC, Mat&dstPC, const int ICP_nbIterations)
+{
+
+    double thresholdlen = 0.1 * model_diameter;
+
+    int nbIterations = ICP_nbIterations; //30
+    int nbIterationsIn = 3;
+    double mu = 8;
+    int nbIterShrink = 3;
+    double p = 0.5;
+    IcpMethod method = pointToPlane;
+    bool verbose = false;
+    size_t kNormals = 8;
+
+#ifdef _OPENMP
+#pragma omp parallel for 
+#endif
+
+    for (int i = 0; i < resultsS.size(); i++) {
+
+        Mat pct_cv = transformPCPose(srcPC, resultsS[i]->pose);
+        MatrixXf pct;
+        cv::cv2eigen(pct_cv, pct);
+        MatrixXf range(2, 3);//sampled_pc采样后的模型
+        range(0, 0) = pct.col(0).minCoeff() - thresholdlen;
+        range(0, 1) = pct.col(1).minCoeff() - thresholdlen;
+        range(0, 2) = pct.col(2).minCoeff() - thresholdlen;
+        range(1, 0) = pct.col(0).maxCoeff() + thresholdlen;
+        range(1, 1) = pct.col(1).maxCoeff() + thresholdlen;
+        range(1, 2) = pct.col(2).maxCoeff() + thresholdlen;
+        //cout << range << endl;
+        //cout << scene_range1.transpose() << endl.
+        //cout << scene_range2.transpose() << endl;
+
+        MatrixXf downsampleScene;
+        cv::cv2eigen(dstPC, downsampleScene);
+        MatrixXf modelmove(downsampleScene.rows(), 6);
+        int size = 0;
+        for (int j = 0; j < downsampleScene.rows(); j++)
+        {
+            float min = (downsampleScene.row(j).head(3) - range.row(0)).minCoeff();
+            float max = (downsampleScene.row(j).head(3) - range.row(1)).maxCoeff();
+            //cout << min << "  " << max << endl;
+            if (min > 0 && max < 0)
+            {
+                modelmove.row(size) = downsampleScene.row(j);
+                size++;
+            }
+        }
+        //cout << sampled_pc.rows() <<" "<< size << endl;
+        if (size > 100)
+        {
+            IcpOptimizer myIcpOptimizer(pct.cast<double>(), modelmove.block(0, 0, size, 6).cast<double>(), kNormals, nbIterations, nbIterationsIn, mu, nbIterShrink, p, method, verbose, 2);
+            int hasIcpFailed = myIcpOptimizer.performSparceICP();
+            if (hasIcpFailed)
+            {
+                cerr << "Failed to load the point clouds. Check the paths." << endl;
+            }
+            RigidTransfo resultingTransfo = myIcpOptimizer.getComputedTransfo();
+            //cout << "Computed Rotation : " << endl << resultingTransfo.first << endl << "Computed Translation : " << endl << resultingTransfo.second << endl;
+            MatrixXd P(3, 4);
+            P << resultingTransfo.first, resultingTransfo.second;//横行向合并
+            Matrix4d Pose;
+            Pose << P,
+                RowVector4d(0, 0, 0, 1);
+            //cout << "Computed Rotation : " << endl << Pose << endl;
+            //cout << "Rotation : " << endl << resultsS[i].Pose << endl;
+            Matx44d pose;
+            cv::eigen2cv(Pose, pose);
+            resultsS[i]->pose = pose * resultsS[i]->pose;
+        }
+
+    }
+}
 
 bool PPF3DDetector::matchPose(const Pose3D& sourcePose, const Pose3D& targetPose)
 {
   // translational difference
-  Vec3d dv = targetPose.t - sourcePose.t;
+  Vec3d dv = targetPose.t - sourcePose.t; 
   double dNorm = cv::norm(dv);
 
-  const double phi = fabs ( sourcePose.angle - targetPose.angle );
+  //const double phi = fabs ( sourcePose.angle - targetPose.angle ); // 有问题
 
-  return (phi<this->rotation_threshold && dNorm < this->position_threshold);
+  Eigen::Matrix<double, 4, 4> sMatrix; 
+  cv::cv2eigen(sourcePose.pose, sMatrix); // cv::Mat 转换成 Eigen::Matrix
+  Eigen::Affine3f sPose;
+  sPose.matrix() = sMatrix.cast<float>();
+
+  Eigen::Matrix<double, 4, 4> tMatrix;
+  cv::cv2eigen(targetPose.pose, tMatrix); // cv::Mat 转换成 Eigen::Matrix
+  Eigen::Affine3f tPose;
+  tPose.matrix() = tMatrix.cast<float>();
+
+  Eigen::Matrix3f RtRsInv(sPose.rotation().inverse().lazyProduct(tPose.rotation()).eval());
+  Eigen::AngleAxisf rotation_diff_mat(RtRsInv); //tr(Rs.inv * Rt) = tr(Rt * Rs.inv)
+  const double phi = std::abs(rotation_diff_mat.angle());
+  
+  bool clustering = (phi < this->rotation_threshold && dNorm < this->position_threshold);
+  //if (clustering) {
+  //    std::cout << "phi   " << phi << " rot-thshd " << this->rotation_threshold << " 小于阈值吗：" << (phi < this->rotation_threshold) << std::endl;
+  //    std::cout << "dNorm " << dNorm << " pst-thshd " << this->position_threshold << " 小于阈值吗：" << (dNorm < this->position_threshold)  << std::endl << std::endl;
+  //}
+  return clustering;
 }
 
 void PPF3DDetector::clusterPoses(std::vector<Pose3DPtr>& poseList, int numPoses, std::vector<Pose3DPtr> &finalPoses)
@@ -377,6 +598,14 @@ void PPF3DDetector::clusterPoses(std::vector<Pose3DPtr>& poseList, int numPoses,
       std::vector<Pose3DPtr> curPoses = curCluster->poseList;
       const int curSize = (int)curPoses.size();
 
+      //debug
+      //if (curSize > 1) {
+      //    std::cout << "cluster " << i << std::endl;
+      //    for (Pose3DPtr Pose : curPoses) {
+      //        std::cout << Pose->pose << std::endl;
+      //    }
+      //}
+
       for (int j=0; j<curSize; j++)
       {
         qAvg += curPoses[j]->q;
@@ -388,6 +617,14 @@ void PPF3DDetector::clusterPoses(std::vector<Pose3DPtr>& poseList, int numPoses,
 
       curPoses[0]->updatePoseQuat(qAvg, tAvg);
       curPoses[0]->numVotes=curCluster->numVotes;
+
+      //debug
+      //if (curSize > 1) {
+      //    std::cout << "cluster center:" << std::endl;
+      //    std::cout << curPoses[0]->pose << std::endl;
+      //    std::cout << std::endl;
+      //}
+
 
       finalPoses[i]=curPoses[0]->clone();
     }
@@ -425,10 +662,31 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   float dz = zRange[1] - zRange[0];
   float diameter = sqrt ( dx * dx + dy * dy + dz * dz );
   float distanceSampleStep = diameter * RelativeSceneDistance;*/
-  Mat sampled = samplePCByQuantization(pc, xRange, yRange, zRange, (float)relativeSceneDistance, 0);
-  Mat sampled_ref = Mat(sampled.rows / sceneSamplingStep, pc.cols, CV_32F);
+  
+  //Mat sampled = samplePCByQuantization(pc, xRange, yRange, zRange, (float)relativeSceneDistance, 0);
+
+  float distanceSampleStep = relativeSceneDistance * model_diameter;
+
+  Mat sampled = samplePCByQuantization_cube(pc, xRange, yRange, zRange, distanceSampleStep, 0);
+
+
+  //Mat sampled = samplePCByQuantization_normal(pc, xRange, yRange, zRange, distanceSampleStep, 15.0 / 180 * M_PI, 3);
+
+   
+  Mat sampledDenseRefinement= samplePCUniform(pc, 2);
+  relative_scene_distance = relativeSceneDistance;
+  
+  downsample_scene_dense_refinement = sampledDenseRefinement;
+  downsample_scene = sampled;
+  downsample_scene_flannIndex = indexPCFlann(downsample_scene);
+  downsample_scene_dense_refinement_flannIndex = indexPCFlann(downsample_scene_dense_refinement);
+  
+  int refPointNum = (sampled.rows / sceneSamplingStep) + 1;
+  std::cout << "参考点数：" << refPointNum << std::endl;
+
+  Mat sampled_ref = Mat(refPointNum, pc.cols, CV_32F);
   int c = 0;
-  for (int i = 0; i < sampled.rows && c < sampled_ref.rows; i += sceneSamplingStep)
+  for (int i = 0; i < sampled.rows ; i += sceneSamplingStep)
   {
       sampled.row(i).copyTo(sampled_ref.row(c++));
   }
@@ -441,7 +699,7 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
      uint* accumulator = (uint*)calloc(numAngles*n, sizeof(uint));
   #endif*/
 
-  poseList.reserve((sampled.rows/sceneSamplingStep)+4);
+  poseList.reserve(refPointNum +4);
 
 #if defined _OPENMP
 #pragma omp parallel for
@@ -561,6 +819,8 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
     // convert alpha_index to alpha
     int alpha_index = alphaIndMax;
     double alpha = (alpha_index*(4*M_PI))/numAngles-2*M_PI;
+    //float alpha_index_center = (float)alpha_index + 0.5;
+    //double alpha = (alpha_index_center * (4 * M_PI)) / numAngles - 2 * M_PI;
 
     // Equation 2:
     Matx44d Talpha;
@@ -586,9 +846,35 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   // TODO : Make the parameters relative if not arguments.
   //double MinMatchScore = 0.5;
 
-  int numPosesAdded = sampled.rows/sceneSamplingStep;
+  int numPosesAdded = poseList.size();
 
   clusterPoses(poseList, numPosesAdded, results);
+
+
+  overlapRatio(sampled_pc, downsample_scene, downsample_scene_flannIndex, results, model_diameter* relativeSceneDistance *0.8, 25);
+  std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
+}
+
+void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, Mat& scenePCOrigin, Mat& modelPCOrigin)
+{
+
+    // sparse refine
+    //SparseICP(results, sampled_pc_refinement, downsample_scene, 5);
+
+    icp.registerModelToScene(sampled_pc_refinement, downsample_scene, results);
+
+    
+    overlapRatio(sampled_pc_refinement, downsample_scene, downsample_scene_flannIndex, results, model_diameter * relative_scene_distance * 0.8, 25);
+    std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
+
+    // dense refine
+    //SparseICP(results, sampled_pc_refinement, downsample_scene_dense_refinement, 5);
+
+    icp.registerModelToScene(sampled_pc_refinement, downsample_scene_dense_refinement, results);
+
+    overlapRatio(sampled_pc_refinement, downsample_scene_dense_refinement, downsample_scene_dense_refinement_flannIndex, results, model_diameter * 0.005, 25);
+    std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
+
 }
 
 } // namespace ppf_match_3d

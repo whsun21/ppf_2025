@@ -1,44 +1,70 @@
-//
-//  IMPORTANT: READ BEFORE DOWNLOADING, COPYING, INSTALLING OR USING.
-//
-//  By downloading, copying, installing or using the software you agree to this license.
-//  If you do not agree to this license, do not download, install,
-//  copy or use the software.
-//
-//
-//                          License Agreement
-//                For Open Source Computer Vision Library
-//
-// Copyright (C) 2014, OpenCV Foundation, all rights reserved.
-// Third party copyrights are property of their respective owners.
-//
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-//
-//   * Redistribution's of source code must retain the above copyright notice,
-//     this list of conditions and the following disclaimer.
-//
-//   * Redistribution's in binary form must reproduce the above copyright notice,
-//     this list of conditions and the following disclaimer in the documentation
-//     and/or other materials provided with the distribution.
-//
-//   * The name of the copyright holders may not be used to endorse or promote products
-//     derived from this software without specific prior written permission.
-//
-// This software is provided by the copyright holders and contributors "as is" and
-// any express or implied warranties, including, but not limited to, the implied
-// warranties of merchantability and fitness for a particular purpose are disclaimed.
-// In no event shall the Intel Corporation or contributors be liable for any direct,
-// indirect, incidental, special, exemplary, or consequential damages
-// (including, but not limited to, procurement of substitute goods or services;
-// loss of use, data, or profits; or business interruption) however caused
-// and on any theory of liability, whether in contract, strict liability,
-// or tort (including negligence or otherwise) arising in any way out of
-// the use of this software, even if advised of the possibility of such damage.
-//
+
 // Author: Tolga Birdal <tbirdal AT gmail.com>
 
 #include "precomp.hpp"
+
+namespace kdtree {
+
+    KDTree* BuildKDTree(const  cv::Mat& data)
+    {
+        int rows, dim;
+        rows = (int)data.rows;
+        dim = (int)data.cols;
+        //std::cout << rows * dim  << " " << std::endl;
+        float* temp = new float[rows * dim];
+
+        flann::Matrix<float> dataset_mat(temp, rows, dim);
+        for (int i = 0; i < rows; i++)
+        {
+            for (int j = 0; j < dim; j++)
+            {
+                dataset_mat[i][j] = data.at<float>(i, j);
+                //std::cout << data(i, j) << "  ";
+            }
+            //std::cout << std::endl;
+        }
+
+        //KDTreeSingleIndexParams 为搜索最大叶子数
+        KDTree* tree = new KDTree(dataset_mat, flann::KDTreeSingleIndexParams(15));
+        tree->buildIndex();
+        //std::cout << "test..." << tree->size() << std::endl;
+        //tree = &temp_tree;
+        delete[] temp;
+
+        return tree;
+    }
+
+    void SearchKDTree(KDTree* tree, const cv::Mat& input,
+        std::vector<std::vector<int>>& indices,
+        std::vector<std::vector<float>>& dists, int nn)
+    {
+        int rows_t = input.rows;
+        int dim = input.cols;
+
+        float* temp = new float[rows_t * dim];
+        flann::Matrix<float> query_mat(temp, rows_t, dim);
+        for (int i = 0; i < rows_t; i++)
+        {
+            for (int j = 0; j < dim; j++)
+            {
+                query_mat[i][j] = input.at<float>(i, j);
+            }
+        }
+
+        indices.resize(rows_t);
+        dists.resize(rows_t);
+
+        for (int i = 0; i < rows_t; i++)
+        {
+            indices[i].resize(nn);
+            dists[i].resize(nn);
+        }
+
+        tree->knnSearch(query_mat, indices, dists, nn, flann::SearchParams(128));
+        delete[] temp;
+    }
+}
+
 
 namespace cv
 {
@@ -301,6 +327,330 @@ void queryPCFlann(void* flannIndex, Mat& pc, Mat& indices, Mat& distances, const
   Mat obj_32f;
   pc.colRange(0, 3).copyTo(obj_32f);
   ((FlannIndex*)flannIndex)->knnSearch(obj_32f, indices, distances, numNeighbors, cvflann::SearchParams(32));
+}
+
+Mat samplePCByQuantization_normal(Mat pc, Vec2f& xrange, Vec2f& yrange, Vec2f& zrange, float sampleStep, float anglethreshold, int level)
+{
+
+    //设置网格参数
+    float xr = xrange[1] - xrange[0] + 0.001;//x的跨度
+    float yr = yrange[1] - yrange[0] + 0.001;
+    float zr = zrange[1] - zrange[0] + 0.001;
+
+    //std::cout << xr << " " << xr << " " << xr << " " << sampleStep << std::endl;
+
+    int numPoints = 0;
+
+
+    int xnumSamplesDim = (int)(xr / sampleStep) + 1;//采样宽度数
+    int ynumSamplesDim = (int)(yr / sampleStep) + 1;//采样宽度数
+    int znumSamplesDim = (int)(zr / sampleStep) + 1;//采样宽度数
+    std::vector< std::vector<int> > map;
+
+    map.resize((xnumSamplesDim + 1) * (ynumSamplesDim + 1) * (znumSamplesDim + 1));//设置行数
+
+
+    //std::cout << xnumSamplesDim << "  vvvv " << ynumSamplesDim << "  vvvv " << znumSamplesDim << "  vvvv " << map.size() << std::endl;
+
+
+    for (int i = 0; i < pc.rows; i++)
+    {
+        const float* point = pc.ptr<float>(i);
+
+        const int xCell = (int)((float)xnumSamplesDim * (point[0] - xrange[0]) / xr);//计算x轴索引下标
+        const int yCell = (int)((float)ynumSamplesDim * (point[1] - yrange[0]) / yr);//计算y轴索引下标
+        const int zCell = (int)((float)znumSamplesDim * (point[2] - zrange[0]) / zr);//计算z轴索引下标
+        const int index = xCell * ynumSamplesDim * znumSamplesDim + yCell * znumSamplesDim + zCell;//计算在二维向量组中的下标
+        map[index].push_back(i);//把下标压入二维向量组								  //  }
+    }
+    //下采样
+
+    Mat ypc = pc;
+    Mat dpc = Mat(pc.rows, pc.cols, CV_32F);
+
+    int row = 0;
+    int mapsize = map.size();
+    double cosanglethreshold = cos(anglethreshold);
+
+    for (int lev = 0; lev < level; lev++)
+    {
+        row = 0;
+        int nn = 0;
+        int span = pow(2, lev);
+        //std::cout << lev << " " << span << std::endl;
+        for (int i = 0; i < xnumSamplesDim; i += span)
+        {
+            for (int j = 0; j < ynumSamplesDim; j += span)
+            {
+                for (int k = 0; k < znumSamplesDim; k += span)
+                {
+                    //
+                    std::vector<Vec3f> normal;
+                    std::vector<Vec3f> clustnormal;
+                    std::vector<Vec3f> clustcoord;
+                    std::vector<int> count;
+                    std::vector<int> num;
+                    std::vector<int> total_num;
+                    //聚类
+                    for (int i1 = 0; i1 < span && i + i1 < xnumSamplesDim; i1++)
+                    {
+                        for (int j1 = 0; j1 < span && j + j1 < ynumSamplesDim; j1++)
+                        {
+                            for (int k1 = 0; k1 < span && k + k1 < znumSamplesDim; k1++)
+                            {
+                                int index = (i + i1) * ynumSamplesDim * znumSamplesDim + (j + j1) * znumSamplesDim + (k + k1);
+                                nn += map[index].size();
+                                for (int n = 0; n < map[index].size(); n++)
+                                {
+                                    int yn = true;
+                                    int m = map[index][n];
+
+                                    Vec3f a(ypc.at<float>(m, 3), ypc.at<float>(m, 4), ypc.at<float>(m, 5));
+                                    Vec3f c(ypc.at<float>(m, 0), ypc.at<float>(m, 1), ypc.at<float>(m, 2));
+                                    for (int m = 0; m < normal.size(); m++)
+                                    {
+                                        float acosz = (a.dot(normal[m]));
+                                        if (acosz > cosanglethreshold)
+                                        {
+                                            yn = false;
+                                            clustnormal[m] = clustnormal[m] + a;
+                                            clustcoord[m] = clustcoord[m] + c;
+                                            count[m]++;
+                                            break;
+                                        }
+                                    }
+
+                                    if (yn)
+                                    {
+                                        normal.push_back(a);
+                                        clustnormal.push_back(a);
+                                        clustcoord.push_back(c);
+                                        count.push_back(1);
+                                    }
+                                }
+
+
+
+                            }
+
+                        }
+                    }
+                    //清空
+                    for (int i1 = 0; i1 < span && i + i1 < xnumSamplesDim; i1++)
+                    {
+                        for (int j1 = 0; j1 < span && j + j1 < ynumSamplesDim; j1++)
+                        {
+                            for (int k1 = 0; k1 < span && k + k1 < znumSamplesDim; k1++)
+                            {
+                                int index = (i + i1) * ynumSamplesDim * znumSamplesDim + (j + j1) * znumSamplesDim + (k + k1);
+                                map[index].clear();
+                                //std::cout << map[index].size()<<std::endl;
+                            }
+                        }
+
+                    }
+
+
+
+                    //插入
+                    int index = (i)*ynumSamplesDim * znumSamplesDim + (j)*znumSamplesDim + (k);
+                    for (int i1 = 0; i1 < clustnormal.size(); i1++)
+                    {
+                        double norm = cv::norm(clustnormal[i1]);
+                        if (norm > 0.000001) {
+                            Vec3f a = clustnormal[i1] / norm;
+
+                            dpc.at<float>(row, 0) = clustcoord[i1](0) / count[i1];
+                            dpc.at<float>(row, 1) = clustcoord[i1](1) / count[i1];
+                            dpc.at<float>(row, 2) = clustcoord[i1](2) / count[i1];
+                            dpc.at<float>(row, 3) = a(0);
+                            dpc.at<float>(row, 4) = a(1);
+                            dpc.at<float>(row, 5) = a(2);
+                            /*if (count[i1] != total_num[i1])
+                            {
+                                std::cout << count[i1] << "  " << total_num[i1] << std::endl;
+                                system("pause");
+                            }*/
+
+
+                            map[index].push_back(row);
+                            row++;
+                        }
+                        /*else
+                        {
+                            std::cout << total_num[i1] << std::endl;
+                        }*/
+
+                    }
+                }
+
+            }
+        }
+
+
+        //改写数据
+        ypc = dpc.rowRange(0, row).colRange(0, 6);
+    }
+
+    return ypc;
+}
+
+Mat samplePCByQuantization_cube(Mat pc, Vec2f& xrange, Vec2f& yrange, Vec2f& zrange, float sampleStep, int weightByCenter)
+{
+    std::vector< std::vector<int> > map;
+
+    //int numSamplesDim = (int)(1.0/sampleStep);
+
+    float xr = xrange[1] - xrange[0];
+    float yr = yrange[1] - yrange[0];
+    float zr = zrange[1] - zrange[0];
+
+    // 使用方格进行采样
+    int xnumSamplesDim = (int)(xr / sampleStep);
+    int ynumSamplesDim = (int)(yr / sampleStep);
+    int znumSamplesDim = (int)(zr / sampleStep);
+
+    int numPoints = 0;
+
+    map.resize((xnumSamplesDim + 1) * (ynumSamplesDim + 1) * (znumSamplesDim + 1));
+
+    // OpenMP might seem like a good idea, but it didn't speed this up for me
+    //#pragma omp parallel for
+    for (int i = 0; i < pc.rows; i++)
+    {
+        const float* point = pc.ptr<float>(i);
+
+        // quantize a point
+        const int xCell = (int)((float)xnumSamplesDim * (point[0] - xrange[0]) / xr);
+        const int yCell = (int)((float)ynumSamplesDim * (point[1] - yrange[0]) / yr);
+        const int zCell = (int)((float)znumSamplesDim * (point[2] - zrange[0]) / zr);
+        const int index = xCell * ynumSamplesDim * znumSamplesDim + yCell * znumSamplesDim + zCell;
+
+        /*#pragma omp critical
+            {*/
+        map[index].push_back(i);
+        //  }
+    }
+
+    for (unsigned int i = 0; i < map.size(); i++)
+    {
+        numPoints += (map[i].size() > 0);
+    }
+
+    Mat pcSampled = Mat(numPoints, pc.cols, CV_32F);
+    int c = 0;
+
+    for (unsigned int i = 0; i < map.size(); i++)
+    {
+        double px = 0, py = 0, pz = 0;
+        double nx = 0, ny = 0, nz = 0;
+
+        std::vector<int> curCell = map[i];
+        int cn = (int)curCell.size();
+        if (cn > 0)
+        {
+            if (weightByCenter)
+            {
+                int xCell, yCell, zCell;
+                double xc, yc, zc;
+                double weightSum = 0;
+
+                zCell = i % znumSamplesDim;//计算点云点的下标索引
+                yCell = ((i - zCell) / znumSamplesDim) % ynumSamplesDim;
+                xCell = ((i - zCell - yCell * ynumSamplesDim) / (ynumSamplesDim * znumSamplesDim));
+                xc = ((double)xCell + 0.5) * (double)xr / xnumSamplesDim + (double)xrange[0];//计算单元格中心坐标
+                yc = ((double)yCell + 0.5) * (double)yr / ynumSamplesDim + (double)yrange[0];
+                zc = ((double)zCell + 0.5) * (double)zr / znumSamplesDim + (double)zrange[0];
+
+                for (int j = 0; j < cn; j++)
+                {
+                    const int ptInd = curCell[j];
+                    float* point = pc.ptr<float>(ptInd);
+                    const double dx = point[0] - xc;
+                    const double dy = point[1] - yc;
+                    const double dz = point[2] - zc;
+                    const double d = sqrt(dx * dx + dy * dy + dz * dz);
+                    double w = 0;
+
+                    if (d > EPS)
+                    {
+                        // it is possible to use different weighting schemes.
+                        // inverse weigthing was just good for me
+                        // exp( - (distance/h)**2 )
+                        //const double w = exp(-d*d);
+                        w = 1.0 / d;
+                    }
+
+                    //float weights[3]={1,1,1};
+                    px += w * (double)point[0];
+                    py += w * (double)point[1];
+                    pz += w * (double)point[2];
+                    nx += w * (double)point[3];
+                    ny += w * (double)point[4];
+                    nz += w * (double)point[5];
+
+                    weightSum += w;
+                }
+                px /= (double)weightSum;
+                py /= (double)weightSum;
+                pz /= (double)weightSum;
+                nx /= (double)weightSum;
+                ny /= (double)weightSum;
+                nz /= (double)weightSum;
+            }
+            else
+            {
+                for (int j = 0; j < cn; j++)
+                {
+                    const int ptInd = curCell[j];
+                    float* point = pc.ptr<float>(ptInd);
+
+                    px += (double)point[0];
+                    py += (double)point[1];
+                    pz += (double)point[2];
+                    nx += (double)point[3];
+                    ny += (double)point[4];
+                    nz += (double)point[5];
+                }
+
+                px /= (double)cn;
+                py /= (double)cn;
+                pz /= (double)cn;
+                nx /= (double)cn;
+                ny /= (double)cn;
+                nz /= (double)cn;
+
+            }
+
+            float* pcData = pcSampled.ptr<float>(c);
+            pcData[0] = (float)px;
+            pcData[1] = (float)py;
+            pcData[2] = (float)pz;
+
+            // normalize the normals
+            double norm = sqrt(nx * nx + ny * ny + nz * nz);
+
+            if (norm > EPS)
+            {
+                pcData[3] = (float)(nx / norm);
+                pcData[4] = (float)(ny / norm);
+                pcData[5] = (float)(nz / norm);
+            }
+            else
+            {
+                pcData[3] = 0.0f;
+                pcData[4] = 0.0f;
+                pcData[5] = 0.0f;
+            }
+            //#pragma omp atomic
+            c++;
+
+            curCell.clear();
+        }
+    }
+
+    map.clear();
+    return pcSampled;
 }
 
 // uses a volume instead of an octree

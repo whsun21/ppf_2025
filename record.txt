@@ -1,0 +1,10 @@
+# halcon 
+rate UWA
+ rateManifold: 37 / 45 = 0.822222          parasaurolophus_high
+ rateManifold: 49 / 50 = 0.98          cheff
+ rateManifold: 45 / 48 = 0.9375          chicken_high
+ rateManifold: 43 / 45 = 0.955556          T-rex_high
+manifld
+recognition rate: 174 / 188 = 0.925532
+recognition rate of all objs with less than 84% occlusion: 161 / 165 = 0.975758
+

@@ -84,7 +84,7 @@ defined as follows:
 
 where \f$\bf{{m1}}\f$ and \f$\bf{{m2}}\f$ are feature two selected points on the model (or scene),
 \f$\bf{{d}}\f$ is the difference vector, \f$\bf{{n1}}\f$ and \f$\bf{{n2}}\f$ are the normals at \f$\bf{{m1}}\f$ and
-\f$\bf{m2}\f$. During the training stage, this vector is quantized, indexed. In the test stage, same
+\f$\bf{m2}\f$. During the training stage, this vector is quantized, indexed. In the writeMap stage, same
 features are extracted from the scene and compared to the database. With a few tricks like
 separation of the rotational components, the pose estimation part can also be made efficient (check
 the reference for more details). A Hough-like voting and clustering is employed to estimate the

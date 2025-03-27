@@ -42,7 +42,10 @@ static inline double TAngle3Normalized(const Vec3d& a, const Vec3d& b)
    angle = acos(a dot b)           # Hamdi Sahloul (simplification, a & b are normalized)
   */
 
-  return acos(a.dot(b));
+    return acos(a.dot(b));
+    //Vec3d axb = a.cross(b);
+    //double adotb = a.dot(b);
+    //return atan2(cv::norm(axb), adotb);
 }
 
 static inline void rtToPose(const Matx33d& R, const Vec3d& t, Matx44d& Pose)

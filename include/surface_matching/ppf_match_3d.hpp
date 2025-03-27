@@ -27,6 +27,7 @@ IEEE Computer Society Conference on Computer Vision and Pattern Recognition (CVP
 #include <vector>
 #include "pose_3d.hpp"
 #include "t_hash_int.hpp"
+#include "surface_matching/icp.hpp"
 
 namespace cv
 {
@@ -108,6 +109,10 @@ public:
 
   Mat getSampledModel();
 
+  void  PPF3DDetector::SparseICP(std::vector<Pose3DPtr>& resultsS, Mat& srcPC, Mat& dstPC, const int ICP_nbIterations);
+  void PPF3DDetector::overlapRatio(const Mat& srcPC, const Mat& dstPC, void* dstFlann, std::vector<Pose3DPtr>& resultsS, double threshold, double anglethreshold);
+  void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, Mat& scenePCOrigin, Mat& modelPCOrigin);
+
 protected:
 
   double angle_step, angle_step_radians, distance_step;
@@ -121,6 +126,16 @@ protected:
   bool use_weighted_avg;
 
   int scene_sample_step;
+
+  //
+  double model_diameter;
+  Mat sampled_pc_refinement;
+  double relative_scene_distance;
+  Mat downsample_scene;
+  Mat downsample_scene_dense_refinement;
+  void* downsample_scene_flannIndex;
+  void* downsample_scene_dense_refinement_flannIndex;
+  //
 
   void clearTrainingModels();
 

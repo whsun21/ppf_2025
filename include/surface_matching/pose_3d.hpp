@@ -128,6 +128,9 @@ public:
   CV_PROP double angle;
   CV_PROP Vec3d t;
   CV_PROP Vec4d q;
+
+  //
+  double overlap;
 };
 
 /**

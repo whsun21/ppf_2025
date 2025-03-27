@@ -7,30 +7,23 @@
 #include "src/c_utils.hpp"
 //#include "src/precomp.hpp"
 //#include "opencv2/flann/matrix.h" 
-#include "flann/flann.hpp"
-#include "flann/algorithms/dist.h"
 
 #include <Windows.h>
 #include <fstream>
 #include <boost/algorithm/string.hpp>
-#include "_deps/Eigen/Dense"
+#include "Eigen/Dense"
 #include <opencv2/core/eigen.hpp>
 #include <map>
-#include <iostream>
 
 using namespace std;
 using namespace cv;
 using namespace ppf_match_3d;
-
-typedef flann::Index<flann::L2<float> > KDTree;
-
+using namespace kdtree;
 
 int writeMap(const map<string, vector<double>> & m, const string & outPath);
 int writeMap(const map<string, double>& m, const string& outPath);
 int readMap(map<string, vector<double>>& m2, const string& inPath);
 int readMap(map<string, double>& m2, const string& inPath);
-void SearchKDTree(KDTree* tree, const Mat& input, std::vector<std::vector<int>>& indices, std::vector<std::vector<float>>& dists, int nn);
-KDTree* BuildKDTree(const  Mat& data);
 
 
 int evalUwa() {
@@ -586,61 +579,3 @@ int readMap(map<string, double>& m2, const string& inPath) {
     return 0;
 }
 
-KDTree* BuildKDTree(const  Mat& data)
-{
-    int rows, dim;
-    rows = (int)data.rows;
-    dim = (int)data.cols;
-    //std::cout << rows * dim  << " " << std::endl;
-    float* temp = new float[rows * dim];
-
-    flann::Matrix<float> dataset_mat(temp, rows, dim);
-    for (int i = 0; i < rows; i++)
-    {
-        for (int j = 0; j < dim; j++)
-        {
-            dataset_mat[i][j] = data.at<float>(i, j);
-            //std::cout << data(i, j) << "  ";
-        }
-        //std::cout << std::endl;
-    }
-
-    //KDTreeSingleIndexParams 为搜索最大叶子数
-    KDTree* tree = new KDTree(dataset_mat, flann::KDTreeSingleIndexParams(15));
-    tree->buildIndex();
-    //std::cout << "test..." << tree->size() << std::endl;
-    //tree = &temp_tree;
-    delete[] temp;
-
-    return tree;
-}
-
-void SearchKDTree(KDTree* tree, const Mat& input,
-    std::vector<std::vector<int>>& indices,
-    std::vector<std::vector<float>>& dists, int nn)
-{
-    int rows_t = input.rows;
-    int dim = input.cols;
-
-    float* temp = new float[rows_t * dim];
-    flann::Matrix<float> query_mat(temp, rows_t, dim);
-    for (int i = 0; i < rows_t; i++)
-    {
-        for (int j = 0; j < dim; j++)
-        {
-            query_mat[i][j] = input.at<float>(i, j);
-        }
-    }
-
-    indices.resize(rows_t);
-    dists.resize(rows_t);
-
-    for (int i = 0; i < rows_t; i++)
-    {
-        indices[i].resize(nn);
-        dists[i].resize(nn);
-    }
-
-    tree->knnSearch(query_mat, indices, dists, nn, flann::SearchParams(128));
-    delete[] temp;
-}
