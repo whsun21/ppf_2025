@@ -1,3 +1,16 @@
+// input output
+#include <wrap/io_trimesh/import.h>
+#include <wrap/io_trimesh/export.h>
+#include <wrap/ply/plylib.cpp> //https://blog.csdn.net/CUSTESC/article/details/106160295
+
+//class MyFace;
+//class MyVertex;
+//
+//struct MyUsedTypes : public vcg::UsedTypes<	vcg::Use<MyVertex>::AsVertexType, vcg::Use<MyFace>::AsFaceType> {};
+//
+//class MyVertex : public vcg::Vertex< MyUsedTypes, vcg::vertex::Coord3f, vcg::vertex::Normal3f, vcg::vertex::Color4b, vcg::vertex::BitFlags  > {};
+//class MyFace : public vcg::Face < MyUsedTypes, vcg::face::VertexRef, vcg::face::Normal3f, vcg::face::Color4b, vcg::face::BitFlags > {};
+//class MyMesh : public vcg::tri::TriMesh< std::vector<MyVertex>, std::vector<MyFace> > {};
 
 
 #include "surface_matching.hpp"
@@ -5,8 +18,10 @@
 #include "surface_matching/ppf_helpers.hpp"
 #include "opencv2/core/utility.hpp"
 
-#include <Windows.h>
 #include <boost/algorithm/string.hpp>
+
+
+
 
 using namespace std;
 using namespace cv;
@@ -21,9 +36,7 @@ static void help(const string& errorMessage)
 
 int main(int argc, char** argv)
 {
-    char currentPath[MAX_PATH];
-    GetCurrentDirectoryA(MAX_PATH, currentPath);
-    string currentPath_s = (string)currentPath;
+
 
     // welcome message
     cout << "****************************************************" << endl;
@@ -65,27 +78,71 @@ int main(int argc, char** argv)
     float keypointStep = stoi((string)argv[4]);
     size_t N = stoi((string)argv[5]);
 
+
+
+
     // 手动检查法向量！
-    Mat pc = loadPLYSimple(modelFileName.c_str(), 1);
+    //Mat pc = loadPLYSimple(modelFileName.c_str(), 1);
     
+    MyMesh pcM;
+    vcg::tri::io::ImporterPLY<MyMesh>::Open(pcM, modelFileName.c_str());
+    Mat pc;
+    vcgMesh2cvMat(pcM, pc);
+
+    //for (int i = 0; i < pc_vcg.rows; i++) {
+    //    cout << pc.row(i) << "loadPLYSimple" <<  endl;
+    //    cout << pc_vcg.row(i) << "vcg" << endl;
+    //}
+
+
     // Now train the model
     cout << "Training..." << endl;
     int64 tick1 = cv::getTickCount();
-    ppf_match_3d::PPF3DDetector detector(0.025, 0.05);//0.025, 0.05
-    detector.trainModel(pc);
+    ppf_match_3d::PPF3DDetector detector(0.025, 0.025);//0.025, 0.05
+    detector.enableDebug(true);
+    detector.trainModel(pc); //// pc_vcg
     int64 tick2 = cv::getTickCount();
     cout << endl << "Training complete in "
          << (double)(tick2-tick1)/ cv::getTickFrequency()
          << " sec" << endl << "Loading model..." << endl;
          
     // Read the scene
-    Mat pcTest = loadPLYSimple(sceneFileName.c_str(), 1);
+    tick1 = cv::getTickCount();
+
+    MyMesh pcS;
+    vcg::tri::io::ImporterPLY<MyMesh>::Open(pcS, sceneFileName.c_str());
+    if (pcS.face.size() == 0) {
+        cout << "Scene has no face. Need faces for normal computing by PerVertexFromCurrentFaceNormal" << endl;
+        return -1;
+    }
+    tri::UpdateNormal<MyMesh>::PerFace(pcS);
+    tri::UpdateNormal<MyMesh>::PerVertexFromCurrentFaceNormal(pcS);
+    tri::UpdateNormal<MyMesh>::NormalizePerVertex(pcS);
+
+    Mat pcTest;
+    vcgMesh2cvMat(pcS, pcTest);
+    //for (int i = 0; i < 1; i++) {
+    //    vcg::Point3f n = pcS.vert[i].N();
+    //    vcg::Point3f p = pcS.vert[i].P();
+    //    vcg::Point3f fn = pcS.face[i].N();
+    //    //
+    //    cout << p[0] << " " << p[1] << " " << p[2] << " " << n[0] << " " << n[1] << " " << n[2] << " " << endl;
+    //    cout << fn[0] << " " << fn[1] << " " << fn[2] << " " << endl;
+    //}
+    //
+    // ....
+    //Mat pcTest = loadPLYSimple(sceneFileName.c_str(), 1);
+    //Mat pcTest = loadPLYSimple_bin(sceneFileName.c_str(), 1); // uwa dataset
     
+    tick2 = cv::getTickCount();
+    cout << endl << "Read Scene Elapsed Time " <<
+        (tick2 - tick1) / cv::getTickFrequency() << " sec" << endl;
+
     // Match the model to the scene and get the pose
     cout << endl << "Starting matching..." << endl;
     vector<Pose3DPtr> results;
     tick1 = cv::getTickCount();
-    detector.match(pcTest, results, 1.0/ keypointStep, 0.025); //1.0/40.0, 0.05；作者建议1.0/5.0
+    detector.match(pcTest, results, 1.0/ keypointStep, 0.025); //1.0/40.0, 0.05；作者建议1.0/5.0，0.025
     tick2 = cv::getTickCount();
     cout << endl << "PPF Elapsed Time " <<
          (tick2-tick1)/cv::getTickFrequency() << " sec" << endl;
@@ -99,27 +156,29 @@ int main(int argc, char** argv)
     }
 
     // Create an instance of ICP
-    ICP icp(5, 0.005f, 2.5f, 8);
+    ICP icp(5, 0.005f, 2.5f, 3);
 
     int64 t1 = cv::getTickCount();
-    int postPoseNum = 50;
+    int postPoseNum = 100;
     if (results_size < postPoseNum) postPoseNum = results_size;
     vector<Pose3DPtr> resultsPost(results.begin(), results.begin() + postPoseNum);
 
-    cout << endl << "Performing ICP on " << resultsPost.size() << " poses..." << endl;
+    cout << endl << "Performing ICP,NMS on " << resultsPost.size() << " poses..." << endl;
     
     // 后处理
-    detector.postProcessing(resultsPost, icp, pcTest, pc); /////////
+    bool refineEnabled = true;
+    bool nmsEnabled = true;
+    detector.postProcessing(resultsPost, icp, refineEnabled, nmsEnabled); /////////
 
     int64 t2 = cv::getTickCount();
-    cout << endl << "ICP Elapsed Time " <<
+    cout << endl << "ICP,NMS Elapsed Time " <<
          (t2-t1)/cv::getTickFrequency() << " sec" << endl;
 
     // Get only first N results - but adjust to results size if num of results are less than that specified by N
-    if (postPoseNum < N) {
+    if (resultsPost.size() < N) {
         cout << endl << "Reducing matching poses to be reported (as specified in code): "
-             << N << " to the number of matches found: " << postPoseNum << endl;
-        N = postPoseNum;
+             << N << " to the number of matches found: " << resultsPost.size() << endl;
+        N = resultsPost.size();
     }
     vector<Pose3DPtr> resultsSub(resultsPost.begin(), resultsPost.begin()+N);
     
@@ -151,7 +210,8 @@ int main(int argc, char** argv)
         //if (i==0)
         {
             Mat pct = transformPCPose(pc_sampled, result->pose); //pc是原始模型
-            writePLY(pct, (resultFileName  + to_string(i) + ".ply").c_str());
+            writePLY(pct, (resultFileName + to_string(i) + ".ply").c_str());
+            //writePLY(pct, ("../samples/data/results/obj_000007_" + to_string(i) + ".ply").c_str());
         }
     }
     

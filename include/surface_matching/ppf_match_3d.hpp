@@ -108,10 +108,12 @@ public:
   void write(FileStorage& fs) const;
 
   Mat getSampledModel();
+  void enableDebug(bool Debug);
 
   void  PPF3DDetector::SparseICP(std::vector<Pose3DPtr>& resultsS, Mat& srcPC, Mat& dstPC, const int ICP_nbIterations);
   void PPF3DDetector::overlapRatio(const Mat& srcPC, const Mat& dstPC, void* dstFlann, std::vector<Pose3DPtr>& resultsS, double threshold, double anglethreshold);
-  void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, Mat& scenePCOrigin, Mat& modelPCOrigin);
+  void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bool refineEnabled, bool nmsEnabled);
+  void PPF3DDetector::NMS(std::vector<Pose3DPtr>& poseList, double Threshold, std::vector<Pose3DPtr>& finalPoses);
 
 protected:
 
@@ -128,8 +130,11 @@ protected:
   int scene_sample_step;
 
   //
+  bool debug;
   double model_diameter;
+  Vec3f model_center;
   Mat sampled_pc_refinement;
+
   double relative_scene_distance;
   Mat downsample_scene;
   Mat downsample_scene_dense_refinement;

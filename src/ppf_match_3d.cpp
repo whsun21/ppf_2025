@@ -7,6 +7,8 @@
 #include "Eigen/Core"
 #include <opencv2/core/eigen.hpp>
 #include "IcpOptimizer.h"
+//#include "surface_matching/poisson_disk_sampling.hpp"
+
 using namespace Eigen;
 using namespace std;
 
@@ -134,6 +136,7 @@ PPF3DDetector::PPF3DDetector(const double RelativeSamplingStep, const double Rel
   hash_table = NULL;
   hash_nodes = NULL;
 
+  debug = false;
   //setSearchParams();
 }
 
@@ -159,6 +162,11 @@ Mat PPF3DDetector::getSampledModel()
     }
     return sampled_pc;
 }
+
+void PPF3DDetector::enableDebug(bool Debug) {
+    debug = Debug;
+}
+
 
 // compute per point PPF as in paper
 void PPF3DDetector::computePPFFeatures(const Vec3d& p1, const Vec3d& n1,
@@ -211,6 +219,12 @@ void PPF3DDetector::trainModel(const Mat &PC)
   float dz = zRange[1] - zRange[0];
   float diameter = sqrt ( dx * dx + dy * dy + dz * dz );
 
+  Vec3f modelCenter;
+  modelCenter(0) = (xRange[1] + xRange[0]) / 2;
+  modelCenter(1) = (yRange[1] + yRange[0]) / 2;
+  modelCenter(2) = (zRange[1] + zRange[0]) / 2;
+  model_center = modelCenter;
+
   float distanceStep = (float)(diameter * sampling_step_relative);
   //distanceStep /= 2;
 
@@ -220,11 +234,14 @@ void PPF3DDetector::trainModel(const Mat &PC)
   //Mat sampled = samplePCByQuantization_normal(PC, xRange, yRange, zRange, distanceStep, 15.0 / 180 * 3.1415, 3);
   
   Mat sampled = samplePCByQuantization_cube(PC, xRange, yRange, zRange, distanceStep, 0);
-  writePLY(sampled, "../samples/data/results/sampled_model.ply");
 
-  float distanceStepRefine = (float)(diameter * 0.01);
+  float distanceStepRefine = (float)(distanceStep / 2);
   Mat sampledRefinement = samplePCByQuantization_cube(PC, xRange, yRange, zRange, distanceStepRefine, 0);
-  writePLY(sampledRefinement, "../samples/data/results/sampled_model_refine.ply");
+  
+  if (debug) {
+      writePLY(sampled, "../samples/data/results/sampled_model.ply");
+      writePLY(sampledRefinement, "../samples/data/results/sampled_model_refine.ply");
+  }
 
   int size = sampled.rows*sampled.rows;
 
@@ -391,7 +408,8 @@ void PPF3DDetector::overlapRatio(const Mat& srcPC, const Mat& dstPC, void* dstFl
                 }
             }
         }
-        resultsS[i]->overlap = 1.0 * pointNum / numElSrc;
+        double Overlap = 1.0 * pointNum / numElSrc;
+        resultsS[i]->updateOverlap(Overlap);
 
         delete[] distances;
         delete[] indices;
@@ -633,6 +651,182 @@ void PPF3DDetector::clusterPoses(std::vector<Pose3DPtr>& poseList, int numPoses,
   poseClusters.clear();
 }
 
+//https://zhuanlan.zhihu.com/p/78504109
+//https://blog.csdn.net/m0_45388819/article/details/117217322
+//https://blog.csdn.net/qq_31638535/article/details/143980041
+void PPF3DDetector::NMS(std::vector<Pose3DPtr>& poseList, double Threshold, std::vector<Pose3DPtr>& finalPoses)
+{
+    finalPoses.clear();
+
+    
+    int i, j;
+    int numInputPose = poseList.size();
+    vector<bool> is_suppressed(numInputPose);
+    //vector<map<string, Vec2f> > bboxList(numInputPose);
+    //vector<float> bboxVolumes(numInputPose);
+    vector<Mat> centerTransformed(numInputPose);
+    for (i = 0; i < numInputPose; i++) {
+        is_suppressed[i] = 0;
+
+        //Mat pcTemp = transformPCPose(sampled_pc, poseList[i]->pose);
+        //Vec2f xRange, yRange, zRange;
+        //computeBboxStd(pcTemp, xRange, yRange, zRange);
+        //bboxList[i]["xRange"] = xRange;
+        //bboxList[i]["yRange"] = yRange;
+        //bboxList[i]["zRange"] = zRange;
+
+        //float dx = xRange[1] - xRange[0];
+        //float dy = yRange[1] - yRange[0];
+        //float dz = zRange[1] - zRange[0];
+        //bboxVolumes[i] = dx * dy * dz;
+
+        Mat mc = Mat(model_center).reshape(1, 1);
+        Mat ctT = transformPCPose(mc, poseList[i]->pose);
+        centerTransformed[i] = ctT;
+        //cout << ctT.row(0) << endl;
+
+    }
+
+    double th = Threshold * model_diameter;
+
+    for (i = 0; i < numInputPose; i++)                // 循环所有窗口   
+    {
+        if (!is_suppressed[i])           // 判断窗口是否被抑制   
+        {
+            /*map<string, Vec2f>& bboxKeeped = bboxList[i];
+            float& bboxKeepedVolume = bboxVolumes[i];*/
+            Mat& centerKeeped = centerTransformed[i];
+            //cout << centerKeeped.row(0) << endl;
+
+            for (j = i + 1; j < numInputPose; j++)
+            {
+                if (!is_suppressed[j])   // 判断窗口是否被抑制   
+                {
+                    Mat& centerCurrent = centerTransformed[j];
+                    //cout << centerCurrent.row(0) << endl;
+
+                    double centerDistance = cv::norm(centerCurrent.row(0) - centerKeeped.row(0));
+                    if (centerDistance < th) //0.5
+                    {
+                        is_suppressed[j] = 1;           // 将窗口j标记为抑制   
+                    }
+
+                    //map<string, Vec2f>& bboxCurrent= bboxList[j];
+
+                    //float inter_x = min(bboxCurrent["xRange"][1], bboxKeeped["xRange"][1]) - max(bboxCurrent["xRange"][0], bboxKeeped["xRange"][0]);
+                    //float inter_y = min(bboxCurrent["yRange"][1], bboxKeeped["yRange"][1]) - max(bboxCurrent["yRange"][0], bboxKeeped["yRange"][0]);
+                    //float inter_z = min(bboxCurrent["zRange"][1], bboxKeeped["zRange"][1]) - max(bboxCurrent["zRange"][0], bboxKeeped["zRange"][0]);
+
+                    //if (inter_x > 0 && inter_y > 0 && inter_z > 0)
+                    //{
+                    //    float inter = inter_x * inter_y * inter_z;
+                    //    float& bboxCurrentVolume = bboxVolumes[j];
+                    //    float Union = bboxKeepedVolume + bboxCurrentVolume - inter;
+                    //    float iou = inter / Union;
+                    //    if (iou > Threshold)          // 判断重叠比率是否超过重叠阈值   0.4
+                    //    {
+                    //        is_suppressed[j] = 1;           // 将窗口j标记为抑制   
+                    //    }
+                    //}
+                }
+
+            }
+        }
+    }
+
+    for (i = 0; i < numInputPose; i++)                  // 遍历所有输入窗口   
+    {
+        if (!is_suppressed[i])             // 将未发生抑制的窗口信息保存到输出信息中   
+        {
+            finalPoses.push_back(poseList[i]->clone()); //clone overlap
+        }
+    }
+
+}
+//
+//int nonMaximumSuppression(int numBoxes, const CvPoint* points,
+//    const CvPoint* oppositePoints, const float* score,
+//    float overlapThreshold,
+//    int* numBoxesOut, CvPoint** pointsOut,
+//    CvPoint** oppositePointsOut, float** scoreOut)
+//{
+//
+//    // numBoxes：窗口数目// points：窗口左上角坐标点// oppositePoints：窗口右下角坐标点  
+//    // score：窗口得分// overlapThreshold：重叠阈值控制// numBoxesOut：输出窗口数目  
+//    // pointsOut：输出窗口左上角坐标点// oppositePoints：输出窗口右下角坐标点  
+//    // scoreOut：输出窗口得分  
+//    int i, j, index;
+//    float* box_area = (float*)malloc(numBoxes * sizeof(float));    // 定义窗口面积变量并分配空间   
+//    int* indices = (int*)malloc(numBoxes * sizeof(int));          // 定义窗口索引并分配空间   
+//    int* is_suppressed = (int*)malloc(numBoxes * sizeof(int));    // 定义是否抑制表标志并分配空间   
+//    // 初始化indices、is_supperssed、box_area信息   
+//    for (i = 0; i < numBoxes; i++)
+//    {
+//        indices[i] = i;
+//        is_suppressed[i] = 0;
+//        box_area[i] = (float)((oppositePoints[i].x - points[i].x + 1) *
+//            (oppositePoints[i].y - points[i].y + 1));
+//    }
+//    // 对输入窗口按照分数比值进行排序，排序后的编号放在indices中   
+//    sort(numBoxes, score, indices);
+//    for (i = 0; i < numBoxes; i++)                // 循环所有窗口   
+//    {
+//        if (!is_suppressed[indices[i]])           // 判断窗口是否被抑制   
+//        {
+//            for (j = i + 1; j < numBoxes; j++)    // 循环当前窗口之后的窗口   
+//            {
+//                if (!is_suppressed[indices[j]])   // 判断窗口是否被抑制   
+//                {
+//                    int x1max = max(points[indices[i]].x, points[indices[j]].x);                     // 求两个窗口左上角x坐标最大值   
+//                    int x2min = min(oppositePoints[indices[i]].x, oppositePoints[indices[j]].x);     // 求两个窗口右下角x坐标最小值   
+//                    int y1max = max(points[indices[i]].y, points[indices[j]].y);                     // 求两个窗口左上角y坐标最大值   
+//                    int y2min = min(oppositePoints[indices[i]].y, oppositePoints[indices[j]].y);     // 求两个窗口右下角y坐标最小值   
+//                    int overlapWidth = x2min - x1max + 1;            // 计算两矩形重叠的宽度   
+//                    int overlapHeight = y2min - y1max + 1;           // 计算两矩形重叠的高度   
+//                    if (overlapWidth > 0 && overlapHeight > 0)
+//                    {
+//                        float overlapPart = (overlapWidth * overlapHeight) / box_area[indices[j]];    // 计算重叠的比率   
+//                        if (overlapPart > overlapThreshold)          // 判断重叠比率是否超过重叠阈值   
+//                        {
+//                            is_suppressed[indices[j]] = 1;           // 将窗口j标记为抑制   
+//                        }
+//                    }
+//                }
+//            }
+//        }
+//    }
+//
+//    *numBoxesOut = 0;    // 初始化输出窗口数目0   
+//    for (i = 0; i < numBoxes; i++)
+//    {
+//        if (!is_suppressed[i]) (*numBoxesOut)++;    // 统计输出窗口数目   
+//    }
+//
+//    *pointsOut = (CvPoint*)malloc((*numBoxesOut) * sizeof(CvPoint));           // 分配输出窗口左上角坐标空间   
+//    *oppositePointsOut = (CvPoint*)malloc((*numBoxesOut) * sizeof(CvPoint));   // 分配输出窗口右下角坐标空间   
+//    *scoreOut = (float*)malloc((*numBoxesOut) * sizeof(float));                // 分配输出窗口得分空间   
+//    index = 0;
+//    for (i = 0; i < numBoxes; i++)                  // 遍历所有输入窗口   
+//    {
+//        if (!is_suppressed[indices[i]])             // 将未发生抑制的窗口信息保存到输出信息中   
+//        {
+//            (*pointsOut)[index].x = points[indices[i]].x;
+//            (*pointsOut)[index].y = points[indices[i]].y;
+//            (*oppositePointsOut)[index].x = oppositePoints[indices[i]].x;
+//            (*oppositePointsOut)[index].y = oppositePoints[indices[i]].y;
+//            (*scoreOut)[index] = score[indices[i]];
+//            index++;
+//        }
+//
+//    }
+//
+//    free(indices);          // 释放indices空间   
+//    free(box_area);         // 释放box_area空间   
+//    free(is_suppressed);    // 释放is_suppressed空间   
+//
+//    return LATENT_SVM_OK;
+//}
+
 void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const double relativeSceneSampleStep, const double relativeSceneDistance)
 {
   if (!trained)
@@ -673,7 +867,9 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   //Mat sampled = samplePCByQuantization_normal(pc, xRange, yRange, zRange, distanceSampleStep, 15.0 / 180 * M_PI, 3);
 
    
-  Mat sampledDenseRefinement= samplePCUniform(pc, 2);
+  float distanceSampleStepRefine = distanceSampleStep / 2;
+  Mat sampledDenseRefinement = samplePCByQuantization_cube(pc, xRange, yRange, zRange, distanceSampleStepRefine, 0);
+  //Mat sampledDenseRefinement= samplePCUniform(pc, 8);
   relative_scene_distance = relativeSceneDistance;
   
   downsample_scene_dense_refinement = sampledDenseRefinement;
@@ -682,7 +878,6 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   downsample_scene_dense_refinement_flannIndex = indexPCFlann(downsample_scene_dense_refinement);
   
   int refPointNum = (sampled.rows / sceneSamplingStep) + 1;
-  std::cout << "参考点数：" << refPointNum << std::endl;
 
   Mat sampled_ref = Mat(refPointNum, pc.cols, CV_32F);
   int c = 0;
@@ -691,8 +886,20 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
       sampled.row(i).copyTo(sampled_ref.row(c++));
   }
 
-  writePLY(sampled, "../samples/data/results/sampled_scene.ply");
-  writePLY(sampled_ref, "../samples/data/results/sampled_scene_ref.ply");
+  if (debug) {
+      std::cout << "参考点数：" << refPointNum << std::endl;
+      writePLY(sampled, "../samples/data/results/sampled_scene.ply");
+      writePLY(sampled_ref, "../samples/data/results/sampled_scene_ref.ply");
+  }
+
+  // radius tree
+  //Mat dest_32f;
+  //sampled.colRange(0, 3).copyTo(dest_32f);
+  //cv::flann::Index downsampleSceneRadiusTree(dest_32f, cv::flann::KDTreeIndexParams(1));
+  //unsigned int max_neighbours = num_ref_points * 2;
+  //double model_max_dist = model_diameter * model_diameter;
+
+
 
   // allocate the accumulator : Moved this to the inside of the loop
   /*#if !defined (_OPENMP)
@@ -717,6 +924,11 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
     uint* accumulator = (uint*)calloc(numAngles*n, sizeof(uint));
     computeTransformRT(p1, n1, Rsg, tsg);
 
+    //std::vector<float> vecQuery{ p1[0], p1[1], p1[2] };
+    //std::vector<int> vecIndex;
+    //std::vector<float> vecDist;
+    //downsampleSceneRadiusTree.radiusSearch(vecQuery, vecIndex, vecDist, model_max_dist, max_neighbours, cv::flann::SearchParams(max_neighbours));
+
     // Tolga Birdal's notice:
     // As a later update, we might want to look into a local neighborhood only
     // To do this, simply search the local neighborhood by radius look up
@@ -728,6 +940,20 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
       {
         const Vec3f p2(sampled.ptr<float>(j));
         const Vec3f n2(sampled.ptr<float>(j) + 3);
+
+    //for (int j = 1; j < vecIndex.size(); j++)
+    //{
+    //  int pInd = vecIndex[j];
+    //  if ((pInd == 0) && (vecIndex[j - 1] == 0))
+    //  {
+    //        break;
+    //  }
+    //  if (i != pInd)
+    //  {
+    //    const Vec3f p2(sampled.ptr<float>(pInd));
+    //    const Vec3f n2(sampled.ptr<float>(pInd) + 3);
+
+
         Vec3d p2t;
         double alpha_scene;
 
@@ -777,69 +1003,74 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
       }
     }
 
-    // Maximize the accumulator
+    // the paper says: "For stability reasons, all peaks that received a certain amount
+    // of votes relative to the maximum peak are used." No specific value is mentioned,
+    // but 90% seems good
+    for (uint k = 0; k < n; k++)
+    {
+        for (int j = 0; j < numAngles; j++)
+        {
+            const uint accInd = k * numAngles + j;
+            const uint accVal = accumulator[accInd];
+            if (accVal > maxVotes)
+                maxVotes = accVal;
+        }
+    }
+    maxVotes *= 0.9;
     for (uint k = 0; k < n; k++)
     {
       for (int j = 0; j < numAngles; j++)
       {
         const uint accInd = k*numAngles + j;
         const uint accVal = accumulator[ accInd ];
-        if (accVal > maxVotes)
+        if (accVal >= maxVotes)
         {
-          maxVotes = accVal;
           refIndMax = k;
           alphaIndMax = j;
-        }
 
-#if !defined (_OPENMP)
-        accumulator[accInd ] = 0;
-#endif
+            // invert Tsg : Luckily rotation is orthogonal: Inverse = Transpose.
+            // We are not required to invert.
+            Vec3d tInv, tmg;
+            Matx33d Rmg;
+            RInv = Rsg.t();
+            tInv = -RInv * tsg;
+
+            Matx44d TsgInv;
+            rtToPose(RInv, tInv, TsgInv);
+
+            // TODO : Compute pose
+            const Vec3f pMax(sampled_pc.ptr<float>(refIndMax));
+            const Vec3f nMax(sampled_pc.ptr<float>(refIndMax) + 3);
+
+            computeTransformRT(pMax, nMax, Rmg, tmg);
+
+            Matx44d Tmg;
+            rtToPose(Rmg, tmg, Tmg);
+
+            // convert alpha_index to alpha
+            int alpha_index = alphaIndMax;
+            double alpha = (alpha_index*(4*M_PI))/numAngles-2*M_PI;
+
+            // Equation 2:
+            Matx44d Talpha;
+            Matx33d R;
+            Vec3d t = Vec3d::all(0);
+            getUnitXRotation(alpha, R);
+            rtToPose(R, t, Talpha);
+
+            Matx44d rawPose = TsgInv * (Talpha * Tmg);
+
+            Pose3DPtr pose(new Pose3D(alpha, refIndMax, accVal));  //modelIndex
+            pose->updatePose(rawPose);
+            #if defined (_OPENMP)
+            #pragma omp critical
+            #endif
+            {
+              poseList.push_back(pose);
+            }
+        }
       }
     }
-
-    // invert Tsg : Luckily rotation is orthogonal: Inverse = Transpose.
-    // We are not required to invert.
-    Vec3d tInv, tmg;
-    Matx33d Rmg;
-    RInv = Rsg.t();
-    tInv = -RInv * tsg;
-
-    Matx44d TsgInv;
-    rtToPose(RInv, tInv, TsgInv);
-
-    // TODO : Compute pose
-    const Vec3f pMax(sampled_pc.ptr<float>(refIndMax));
-    const Vec3f nMax(sampled_pc.ptr<float>(refIndMax) + 3);
-
-    computeTransformRT(pMax, nMax, Rmg, tmg);
-
-    Matx44d Tmg;
-    rtToPose(Rmg, tmg, Tmg);
-
-    // convert alpha_index to alpha
-    int alpha_index = alphaIndMax;
-    double alpha = (alpha_index*(4*M_PI))/numAngles-2*M_PI;
-    //float alpha_index_center = (float)alpha_index + 0.5;
-    //double alpha = (alpha_index_center * (4 * M_PI)) / numAngles - 2 * M_PI;
-
-    // Equation 2:
-    Matx44d Talpha;
-    Matx33d R;
-    Vec3d t = Vec3d::all(0);
-    getUnitXRotation(alpha, R);
-    rtToPose(R, t, Talpha);
-
-    Matx44d rawPose = TsgInv * (Talpha * Tmg);
-
-    Pose3DPtr pose(new Pose3D(alpha, refIndMax, maxVotes));
-    pose->updatePose(rawPose);
-    #if defined (_OPENMP)
-    #pragma omp critical
-    #endif
-    {
-      poseList.push_back(pose);
-    }
-
     free(accumulator);
   }
 
@@ -849,31 +1080,44 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   int numPosesAdded = poseList.size();
 
   clusterPoses(poseList, numPosesAdded, results);
+  //clusterPosesNMS(poseList, 0.5, results);
 
-
-  overlapRatio(sampled_pc, downsample_scene, downsample_scene_flannIndex, results, model_diameter* relativeSceneDistance *0.8, 25);
+  overlapRatio(sampled_pc, downsample_scene, downsample_scene_flannIndex, results, model_diameter* 0.08, 25); //relativeSceneDistance *0.8
   std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
 }
 
-void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, Mat& scenePCOrigin, Mat& modelPCOrigin)
+void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bool refineEnabled, bool nmsEnabled)
 {
+    // nms for multi instances
+    if (nmsEnabled) {
+        std::vector<Pose3DPtr> finalPoses;
+        //std::sort(poseList.begin(), poseList.end(), pose3DPtrCompare);
 
-    // sparse refine
-    //SparseICP(results, sampled_pc_refinement, downsample_scene, 5);
+        NMS(results, 0.5, finalPoses);
+        results = finalPoses;
+        if (debug) cout << "NMS results num: " << results.size() << endl;
+    }
 
-    icp.registerModelToScene(sampled_pc_refinement, downsample_scene, results);
+    if (refineEnabled)
+    {
+        // sparse refine
+        //SparseICP(results, sampled_pc_refinement, downsample_scene, 5);
 
-    
-    overlapRatio(sampled_pc_refinement, downsample_scene, downsample_scene_flannIndex, results, model_diameter * relative_scene_distance * 0.8, 25);
-    std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
+        icp.registerModelToScene(sampled_pc_refinement, downsample_scene, results);
 
-    // dense refine
-    //SparseICP(results, sampled_pc_refinement, downsample_scene_dense_refinement, 5);
 
-    icp.registerModelToScene(sampled_pc_refinement, downsample_scene_dense_refinement, results);
+        overlapRatio(sampled_pc_refinement, downsample_scene, downsample_scene_flannIndex, results, model_diameter * 0.08, 25);//relative_scene_distance * 0.8
+        std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
 
-    overlapRatio(sampled_pc_refinement, downsample_scene_dense_refinement, downsample_scene_dense_refinement_flannIndex, results, model_diameter * 0.005, 25);
-    std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
+        // dense refine
+        //SparseICP(results, sampled_pc_refinement, downsample_scene_dense_refinement, 5);
+
+        icp.registerModelToScene(sampled_pc_refinement, downsample_scene_dense_refinement, results);
+
+        overlapRatio(sampled_pc_refinement, downsample_scene_dense_refinement, downsample_scene_dense_refinement_flannIndex, results, model_diameter * 0.005, 25);
+        std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
+    }
+
 
 }
 

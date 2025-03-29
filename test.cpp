@@ -1,34 +1,25 @@
+// input output
+#include <wrap/io_trimesh/import.h>
+#include <wrap/io_trimesh/export.h>
+#include <wrap/ply/plylib.cpp> //https://blog.csdn.net/CUSTESC/article/details/106160295
 
 
 #include "surface_matching.hpp"
 #include <iostream>
 #include "surface_matching/ppf_helpers.hpp"
 #include "opencv2/core/utility.hpp"
-#include "src/c_utils.hpp"
-//#include "src/precomp.hpp"
-//#include "opencv2/flann/matrix.h" 
 
-#include <Windows.h>
-#include <fstream>
 #include <boost/algorithm/string.hpp>
-#include "Eigen/Dense"
-#include <opencv2/core/eigen.hpp>
-#include <map>
+
 
 using namespace std;
 using namespace cv;
 using namespace ppf_match_3d;
-using namespace kdtree;
 
-int writeMap(const map<string, vector<double>> & m, const string & outPath);
-int writeMap(const map<string, double>& m, const string& outPath);
-int readMap(map<string, vector<double>>& m2, const string& inPath);
-int readMap(map<string, double>& m2, const string& inPath);
+int testUwa() {
 
-
-int evalUwa() {
-    cout << "eval UWA" << endl;
     string dataName = "UWA";
+    cout << "test " << dataName << endl;
 
     string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/UWA/";
     string configPath = "3D models/Mian/";
@@ -56,7 +47,7 @@ int evalUwa() {
     }
     string ADDName = "../eval_" + dataName + (string)"/eval_ADD.txt";
     string ADIName = "../eval_" + dataName + (string)"/eval_ADI.txt";
-    string centerErrorName = "../eval_"+ dataName + (string)"/eval_centerError.txt";
+    string centerErrorName = "../eval_" + dataName + (string)"/eval_centerError.txt";
     string phiName = "../eval_" + dataName + (string)"/eval_phi.txt";
     string dNormName = "../eval_" + dataName + (string)"/eval_dNorm.txt";
     string timeName = "../eval_" + dataName + (string)"/eval_time.txt";
@@ -99,7 +90,7 @@ int evalUwa() {
     cfg_ifs.close();
 
     for (int icfg = 0; icfg < cfgNameAll.size(); icfg++) {
-    //for (int icfg = 0; icfg < 1; icfg++) {
+        //for (int icfg = 0; icfg < 1; icfg++) {
         auto& cfgName = cfgNameAll[icfg];
         // 单个场景
         string cfgPath0 = rootPath + configPath + cfgName;//cfgName
@@ -187,7 +178,7 @@ int evalUwa() {
             LPSTR  occlu = new char[1024];
             GetPrivateProfileString("MODELS", modelOccluKey.c_str(), "NULL", occlu, 512, cfgPath);
             string occlus = occlu;
-            double occlud = stod(occlus); 
+            double occlud = stod(occlus);
             occulsionMap[modelNameInPred].push_back(occlud);
 
             // ADD
@@ -244,7 +235,7 @@ int evalUwa() {
             //cout << ctt_pred.at<Vec3f>(0) << endl;
             //cout << cd << endl;
             centerErrorMap[modelNameInCfg].push_back(cv::norm(cd));
-            
+
             // manifold 
             Eigen::Matrix<double, 4, 4> gtMatrix;
             cv::cv2eigen(gt_pose, gtMatrix); // cv::Mat 转换成 Eigen::Matrix
@@ -277,305 +268,222 @@ int evalUwa() {
     writeMap(timeMap, timeName);
     writeMap(occulsionMap, occulsionName);
     writeMap(Diamters, DiamtersName);
-    
+
     int instancesNum(0);
     for (auto it = ADDMap.begin(); it != ADDMap.end(); ++it) {
         instancesNum += it->second.size();
         cout << it->first << ": " << it->second.size() << endl;
     }
-    cout <<  "Total: " << instancesNum << endl;  //188
+    cout << "Total: " << instancesNum << endl;  //188
 
 
     return 0;
 }
 
-void evalKinect() {
-    string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/Kinect/";
-    string configPath = "/3D models/CVLab/Kinect/ObjectRecognition/Scenes/2011_06_27/configwithbestview/";
-    string rePath = "D:/wenhao.sun/Documents/GitHub/1-project/Halcon_benchmark/halconResults/kinect/";
-
-
-}
-
-int rateUwa() {
-    cout << "rate UWA" << endl;
-    string dataName = "UWA";
-
-    string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/UWA/";
-    string configPath = "3D models/Mian/";
-    string predPath = "D:/wenhao.sun/Documents/GitHub/1-project/Halcon_benchmark/halconResults/uwa/";
-
-    vector<string> uwaModelName{ "parasaurolophus_high", "cheff", "chicken_high", "T-rex_high" };
-    //cout << uwaModelName[0] << endl;
-    map< string, vector<double>> ADDMap;
-    map< string, vector<double>> ADIMap;
-    map< string, vector<double>> centerErrorMap;
-    map< string, vector<double>> phiMap;
-    map< string, vector<double>> dNormMap;
-    map< string, vector<double>> timeMap;
-    map< string, vector<double>> occulsionMap;
-    map<string, int> tpADD;
-    map<string, int> tpADICenter;
-    map<string, int> tpManifold;
-    map<string, int> tpManifoldLowOccul;
-    map<string, int> lowOcculNum;
-    map<string, double> rateADD;
-    map<string, double> rateADICenter;
-    map<string, double> rateManifold;
-    map<string, double> Diamters;
-
-    for (int i = 0; i < uwaModelName.size(); i++) {
-        //ADDMap[uwaModelName[i]] = vector<double>();
-        //phiMap[uwaModelName[i]] = vector<double>();
-        //dNormMap[uwaModelName[i]] = vector<double>();
-        //timeMap[uwaModelName[i]] = vector<double>();
-        tpADD[uwaModelName[i]] = 0;
-        tpADICenter[uwaModelName[i]] = 0;
-        tpManifold[uwaModelName[i]] = 0;
-        tpManifoldLowOccul[uwaModelName[i]] = 0;
-        lowOcculNum[uwaModelName[i]] = 0;
-        rateADD[uwaModelName[i]] = 0;
-        rateADICenter[uwaModelName[i]] = 0;
-        rateManifold[uwaModelName[i]] = 0;
-    }
-    string ADDName = "../eval_" + dataName + (string)"/eval_ADD.txt";
-    string ADIName = "../eval_" + dataName + (string)"/eval_ADI.txt";
-    string centerErrorName = "../eval_" + dataName + (string)"/eval_centerError.txt";
-    string phiName = "../eval_" + dataName + (string)"/eval_phi.txt";
-    string dNormName = "../eval_" + dataName + (string)"/eval_dNorm.txt";
-    string timeName = "../eval_" + dataName + (string)"/eval_time.txt";
-    string DiamtersName = "../eval_" + dataName + (string)"/eval_Diamters.txt";
-    string occulsionName = "../eval_" + dataName + (string)"/eval_occulsion.txt";
-
-    readMap(ADDMap, ADDName);
-    readMap(ADIMap, ADIName);
-    readMap(phiMap, phiName);
-    readMap(dNormMap, dNormName);
-    readMap(timeMap, timeName);
-    readMap(occulsionMap, occulsionName);
-
-    readMap(centerErrorMap, centerErrorName);
-    readMap(Diamters, DiamtersName);
-
-
-    //// threshold 
-    //vector<double> ADDthres(3);
-    //ADDthres[0] = 0.1;
-    //ADDthres[1] = 0.2;
-    //ADDthres[2] = 0.3;
-    double AD_scale = 0.1;
-    double manifold_pos_scale = 0.1;
-
-    int allInstNum = 0;
-    int allTpMfldNum = 0;
-    int allLowOcculNum = 0;
-    int allTpMfldLowOcculNum = 0;
-    double occluThre = 0.84;
-
-    for (int modelIndex = 0; modelIndex < uwaModelName.size(); modelIndex++) {
-
-        string ModelName = uwaModelName[modelIndex];
-        int instanceNum = ADDMap[ModelName].size();
-    
-        //rate ADD
-        double ADDthres = AD_scale * Diamters[ModelName]; ///thres
-        for (int insIndex = 0; insIndex < instanceNum; insIndex++) {
-            double ADDError = ADDMap[ModelName][insIndex];
-            if (ADDError < ADDthres) { ///////////////////////////
-                tpADD[ModelName] += 1;
-            }
-        }
-        rateADD[ModelName] = ( double)tpADD[ModelName] / (double)instanceNum;
-        //cout << " rateADD: " <<  tpADD[ModelName] << " / " << instanceNum << " = " << rateADD[ModelName] << "          " << ModelName << endl;
-    
-        //rate ADI
-        double ADICenterthres = AD_scale * Diamters[ModelName]; ///thres
-
-        for (int insIndex = 0; insIndex < instanceNum; insIndex++) {
-            double ADIError = ADIMap[ModelName][insIndex];
-            double centerError = centerErrorMap[ModelName][insIndex];
-            if (max(ADIError, centerError) < ADICenterthres) { ///////////////////////////
-                tpADICenter[ModelName] += 1;
-            }
-        }
-        rateADICenter[ModelName] = (double)tpADICenter[ModelName] / (double)instanceNum;
-        //cout  << " rateADICenter: " <<  tpADICenter[ModelName] << " / " << instanceNum << " = " << rateADICenter[ModelName] << "          " << ModelName << endl;
-
-        //rate manifold
-        double position_thres = manifold_pos_scale * Diamters[ModelName];
-        double radius_thres = 2 * M_PI / 30;
-        int lowOccul = 0;
-        for (int insIndex = 0; insIndex < instanceNum; insIndex++) {
-            double phiError = phiMap[ModelName][insIndex];
-            double dNormError = dNormMap[ModelName][insIndex];
-            double occlu = occulsionMap[ModelName][insIndex];
-            if (phiError < radius_thres && dNormError < position_thres) { ///////////////////////////
-                tpManifold[ModelName] += 1;
-            }
-            if (occlu <= occluThre) {
-                lowOcculNum[ModelName] += 1;
-                if (phiError < radius_thres && dNormError < position_thres) { ///////////////////////////
-                    tpManifoldLowOccul[ModelName] += 1;
-                }
-            }
-
-        }
-        rateManifold[ModelName] = (double)tpManifold[ModelName] / (double)instanceNum;
-        cout  << " rateManifold: " << tpManifold[ModelName] << " / " << instanceNum << " = " << rateManifold[ModelName] << "          " << ModelName << endl;
-    
-        allInstNum += instanceNum;
-        allTpMfldNum += tpManifold[ModelName];
-
-        allLowOcculNum += lowOcculNum[ModelName];
-        allTpMfldLowOcculNum += tpManifoldLowOccul[ModelName];
-
-    }
-
-    // recognition rate of all objects; 
-    // Manifold
-    cout << "manifld" << endl;
-    cout << "recognition rate: " << allTpMfldNum << " / " << allInstNum << " = " << (double)allTpMfldNum / (double)allInstNum << endl;
-    cout << "recognition rate of all objs with less than 84% occlusion: " << allTpMfldLowOcculNum << " / " << allLowOcculNum << " = " << (double)allTpMfldLowOcculNum / (double)allLowOcculNum << endl;
-
-
-    return 0;
-}
 
 int main() {
-    #if (defined __x86_64__ || defined _M_X64)
-        cout << "Running on 64 bits" << endl;
-    #else
-        cout << "Running on 32 bits" << endl;
-    #endif
+#if (defined __x86_64__ || defined _M_X64)
+    cout << "Running on 64 bits" << endl;
+#else
+    cout << "Running on 32 bits" << endl;
+#endif
 
-    #ifdef _OPENMP
-        cout << "Running with OpenMP" << endl;
-    #else
-        cout << "Running without OpenMP and without TBB" << endl;
-    #endif
+#ifdef _OPENMP
+    cout << "Running with OpenMP" << endl;
+#else
+    cout << "Running without OpenMP and without TBB" << endl;
+#endif
 
-    //evalUwa();
-    rateUwa();
-
-    
-    //writeMap();
-    //readMap();
 }
 
-int main2(){
-    string path = "D:\\wenhao.sun\\Documents\\GitHub\\1-project\\ppf_2025\\test.txt";
-    ifstream infile;
-    infile.open(path);
-    vector<int> pose;
-    pose.resize(16);
-    for (int i = 0; i < 10; i++) {
-        string str;
-        getline(infile, str);
-        for (int j = 0; j < 16; j++) {
-            infile >> pose[j];
-        }
-        getline(infile, str);
-        cout << str;
-    }
-    return 0;
-}
 
+static void help(const string& errorMessage)
+{
+    cout << "Program init error : " << errorMessage << endl;
+    cout << "\nUsage : ppf_matching [input model file] [input scene file]" << endl;
+    cout << "\nPlease start again with new parameters" << endl;
+}
 
 int main1(int argc, char** argv)
 {
-    // 计算距离
-    Vec3f a0(-14.92602151836492, -650.8811157495577, -966.8551517443179);
-    Vec3f a1(56.88654298232103, -132.3572823089681, -1263.999500987719);
-    Vec3f a2(-64.14969939427944, -502.0570831202151, -1155.696617291158);
-    float dist = cv::norm(a0 - a2);
 
 
+    // welcome message
+    cout << "****************************************************" << endl;
+    cout << "* Surface Matching demonstration : demonstrates the use of surface matching"
+        " using point pair features." << endl;
+    cout << "* The sample loads a model and a scene, where the model lies in a different"
+        " pose than the training.\n* It then trains the model and searches for it in the"
+        " input scene. The detected poses are further refined by ICP\n* and printed to the "
+        " standard output." << endl;
+    cout << "****************************************************" << endl;
 
-    //cv::Mat mat3 = (cv::Mat_<int>(3, 3) << 1, 2, 3, 4, 5, 6, 7, 8, 9); //枚举赋值
-    cv::Mat Pose0 = (cv::Mat_<double>(4, 4) << 
-        0.9875361520229935, -0.0499953598989327, 0.1492407867715634, -14.92602151836492,
-        0.1054792992986845, -0.4935452838505936, -0.8633001622890474, -650.8811157495577,
-        0.1168180887837051, 0.8682819339232005, -0.4821203349325862, -966.8551517443179,
-        0, 0, 0, 1);
-    cv::Mat Pose2 = (cv::Mat_<double>(4, 4) <<
-        0.9954723249325371, -0.06285915580300847, 0.07129920634300013, -64.14969939427944,
-        -0.004839312671306641, -0.7826525632536144, -0.6224399941242654, -502.0570831202151,
-        0.09492855917097834, 0.6192767489291676, -0.7794131618656707, -1155.696617291158,
-        0, 0, 0, 1);
-    //daltaT = T2 * inverse(T1), p->T1*p, p->T2*p, T1*p->T2*p, daltaT*T1*p = T2*p
-    Mat daltaT = Pose2 * Pose0.inv();
-    cv::Matx44d dt;
-    daltaT.copyTo(dt);
-    cout << dt << endl;
-
-    Matx33d R;
-    Vec3d t;
-    poseToRT(dt, R, t);
-    Matx33d rtr = R.t() * R;
-    cout << rtr << endl;
-
-    cout << t << endl;
-    cout << cv::norm(t) << endl;
-
-    return 0;
-    
-}
-
-
-int writeMap(const map<string, vector<double>> & m, const string & outPath) {
-    //map<string, vector<double>> m = { {"1th", vector<double>{0,1,2}} , {"2th", vector<double>{0,1,2}} };
-    // 存入文件out.txt
-    ofstream of(outPath);
-    for (const auto& i : m) {
-        of << i.first << ' ';
-        for (auto & v: i.second)
-            of << v << ' ';
-        of << std::endl;
-
+    if (argc < 3)
+    {
+        help("Not enough input arguments");
+        exit(1);
     }
-    of.close();
-    return 0;
-}
 
-int writeMap(const map<string, double>& m, const string& outPath) {
-    //map<string, vector<double>> m = { {"1th", vector<double>{0,1,2}} , {"2th", vector<double>{0,1,2}} };
-    // 存入文件out.txt
-    ofstream of(outPath);
-    for (const auto& i : m) {
-        of << i.first << ' ' << i.second << std::endl;
+#if (defined __x86_64__ || defined _M_X64)
+    cout << "Running on 64 bits" << endl;
+#else
+    cout << "Running on 32 bits" << endl;
+#endif
+
+#ifdef _OPENMP
+    cout << "Running with OpenMP" << endl;
+#else
+    cout << "Running without OpenMP and without TBB" << endl;
+#endif
+
+    string modelFileName = (string)argv[1];
+    string sceneFileName = (string)argv[2];
+    std::vector<std::string> mStr, mn;
+    boost::split(mStr, modelFileName, boost::is_any_of("/"));
+    boost::split(mn, *(mStr.end() - 1), boost::is_any_of("."));
+    std::vector<std::string> sStr, sn;
+    boost::split(sStr, sceneFileName, boost::is_any_of("/"));
+    boost::split(sn, *(sStr.end() - 1), boost::is_any_of("."));
+    string resultFileName = (string)argv[3] + "/" + mn[0] + "-" + sn[0] + "-" + "PCTrans"; //resultFileName = "../samples/data/results//chicken_small2-rs1_normals-PCTrans.ply"
+    float keypointStep = stoi((string)argv[4]);
+    size_t N = stoi((string)argv[5]);
+
+
+
+
+    // 手动检查法向量！
+    //Mat pc = loadPLYSimple(modelFileName.c_str(), 1);
+
+    MyMesh pcM;
+    vcg::tri::io::ImporterPLY<MyMesh>::Open(pcM, modelFileName.c_str());
+    Mat pc;
+    vcgMesh2cvMat(pcM, pc);
+
+    //for (int i = 0; i < pc_vcg.rows; i++) {
+    //    cout << pc.row(i) << "loadPLYSimple" <<  endl;
+    //    cout << pc_vcg.row(i) << "vcg" << endl;
+    //}
+
+
+    // Now train the model
+    cout << "Training..." << endl;
+    int64 tick1 = cv::getTickCount();
+    ppf_match_3d::PPF3DDetector detector(0.025, 0.025);//0.025, 0.05
+    detector.trainModel(pc); //// pc_vcg
+    int64 tick2 = cv::getTickCount();
+    cout << endl << "Training complete in "
+        << (double)(tick2 - tick1) / cv::getTickFrequency()
+        << " sec" << endl << "Loading model..." << endl;
+
+    // Read the scene
+    tick1 = cv::getTickCount();
+
+    MyMesh pcS;
+    vcg::tri::io::ImporterPLY<MyMesh>::Open(pcS, sceneFileName.c_str());
+    if (pcS.face.size() == 0) {
+        cout << "Scene has no face. Need faces for normal computing by PerVertexFromCurrentFaceNormal" << endl;
+        return -1;
     }
-    of.close();
-    return 0;
-}
+    tri::UpdateNormal<MyMesh>::PerFace(pcS);
+    tri::UpdateNormal<MyMesh>::PerVertexFromCurrentFaceNormal(pcS);
+    tri::UpdateNormal<MyMesh>::NormalizePerVertex(pcS);
 
-int readMap(map<string, vector<double>>& m2, const string& inPath) {
-    // 读取文件，存入map m2中
-    //map<string, vector<double>> m2;
-    ifstream iff (inPath);
-    if (!iff.is_open()) { cout << "not open: " << inPath << endl; exit(1); }
-    string keyval;
-    while (getline(iff, keyval)) {
-        std::vector<std::string> mStr;
-        boost::split(mStr, keyval, boost::is_any_of(" "));
-        for (int i = 1; i < mStr.size()-1; i++)
-            m2[mStr[0]].push_back(stod(mStr[i]));
+    Mat pcTest;
+    vcgMesh2cvMat(pcS, pcTest);
+    //for (int i = 0; i < 1; i++) {
+    //    vcg::Point3f n = pcS.vert[i].N();
+    //    vcg::Point3f p = pcS.vert[i].P();
+    //    vcg::Point3f fn = pcS.face[i].N();
+    //    //
+    //    cout << p[0] << " " << p[1] << " " << p[2] << " " << n[0] << " " << n[1] << " " << n[2] << " " << endl;
+    //    cout << fn[0] << " " << fn[1] << " " << fn[2] << " " << endl;
+    //}
+    //
+    // ....
+    //Mat pcTest = loadPLYSimple(sceneFileName.c_str(), 1);
+    //Mat pcTest = loadPLYSimple_bin(sceneFileName.c_str(), 1); // uwa dataset
+
+    tick2 = cv::getTickCount();
+    cout << endl << "Read Scene Elapsed Time " <<
+        (tick2 - tick1) / cv::getTickFrequency() << " sec" << endl;
+
+    // Match the model to the scene and get the pose
+    cout << endl << "Starting matching..." << endl;
+    vector<Pose3DPtr> results;
+    tick1 = cv::getTickCount();
+    detector.match(pcTest, results, 1.0 / keypointStep, 0.025); //1.0/40.0, 0.05；作者建议1.0/5.0，0.025
+    tick2 = cv::getTickCount();
+    cout << endl << "PPF Elapsed Time " <<
+        (tick2 - tick1) / cv::getTickFrequency() << " sec" << endl;
+
+    //check results size from match call above
+    size_t results_size = results.size();
+    cout << "Number of matching poses: " << results_size;
+    if (results_size == 0) {
+        cout << endl << "No matching poses found. Exiting." << endl;
+        exit(0);
     }
-    iff.close();
-    return 0;
-}
 
-int readMap(map<string, double>& m2, const string& inPath) {
-    // 读取文件，存入map m2中
-    //map<string, vector<double>> m2;
-    ifstream iff(inPath);
-    if (!iff.is_open()) { cout << "not open: " << inPath << endl; exit(1); }
-    string keyval;
-    while (getline(iff, keyval)) {
-        std::vector<std::string> mStr;
-        boost::split(mStr, keyval, boost::is_any_of(" "));
-        m2[mStr[0]] = stod(mStr[1]);
+    // Create an instance of ICP
+    ICP icp(5, 0.005f, 2.5f, 3);
+
+    int64 t1 = cv::getTickCount();
+    int postPoseNum = 100;
+    if (results_size < postPoseNum) postPoseNum = results_size;
+    vector<Pose3DPtr> resultsPost(results.begin(), results.begin() + postPoseNum);
+
+    cout << endl << "Performing ICP,NMS on " << resultsPost.size() << " poses..." << endl;
+
+    // 后处理
+    bool refineEnabled = true;
+    bool nmsEnabled = true;
+    detector.postProcessing(resultsPost, icp, refineEnabled, nmsEnabled); /////////
+
+    int64 t2 = cv::getTickCount();
+    cout << endl << "ICP,NMS Elapsed Time " <<
+        (t2 - t1) / cv::getTickFrequency() << " sec" << endl;
+
+    // Get only first N results - but adjust to results size if num of results are less than that specified by N
+    if (resultsPost.size() < N) {
+        cout << endl << "Reducing matching poses to be reported (as specified in code): "
+            << N << " to the number of matches found: " << resultsPost.size() << endl;
+        N = resultsPost.size();
     }
-    iff.close();
-    return 0;
-}
+    vector<Pose3DPtr> resultsSub(resultsPost.begin(), resultsPost.begin() + N);
 
+    //// Create an instance of ICP
+    //ICP icp(100, 0.005f, 2.5f, 8);
+    //int64 t1 = cv::getTickCount();
+
+    // Register for all selected poses
+    //cout << endl << "Performing ICP on " << N << " poses..." << endl;
+    // 
+    Mat pc_sampled = detector.getSampledModel();
+
+    //icp.registerModelToScene(pc_sampled, pcTest, resultsSub);
+    //
+    // int64 t2 = cv::getTickCount();
+    //
+    //cout << endl << "ICP Elapsed Time " <<
+    //     (t2-t1)/cv::getTickFrequency() << " sec" << endl;
+
+    cout << "Poses: " << endl;
+    // debug first five poses
+    //Mat pc_sampled = detector.getSampledModel();
+    for (size_t i = 0; i < resultsSub.size(); i++)
+    {
+        Pose3DPtr result = resultsSub[i];
+        cout << "Pose Result " << i << endl;
+        result->printPose();
+        cout << cv::norm(result->q) << endl;
+        //if (i==0)
+        {
+            Mat pct = transformPCPose(pc_sampled, result->pose); //pc是原始模型
+            writePLY(pct, (resultFileName + to_string(i) + ".ply").c_str());
+            //writePLY(pct, ("../samples/data/results/obj_000007_" + to_string(i) + ".ply").c_str());
+        }
+    }
+
+    return 0;
+
+}

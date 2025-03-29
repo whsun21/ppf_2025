@@ -98,6 +98,11 @@ void Pose3D::updatePose(Matx33d& NewR, Vec3d& NewT)
   dcmToQuat(NewR, q);
 }
 
+void Pose3D::updateOverlap(double Overlap) {
+    this->overlap = Overlap;
+}
+
+
 void Pose3D::updatePoseQuat(Vec4d& Q, Vec3d& NewT)
 {
   Matx33d NewR;
@@ -166,6 +171,7 @@ Pose3DPtr Pose3D::clone()
   new_pose->q = q;
   new_pose->t = t;
   new_pose->angle = angle;
+  new_pose->overlap = overlap;
 
   return new_pose;
 }

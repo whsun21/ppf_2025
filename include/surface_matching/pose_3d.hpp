@@ -95,6 +95,8 @@ public:
    *  \param [in] NewPose New pose to overwrite
    */
   CV_WRAP void updatePose(Matx44d& NewPose);
+  
+  CV_WRAP void updateOverlap(double Overlap);
 
   /**
    *  \brief Updates the pose with the new one

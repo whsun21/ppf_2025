@@ -11,6 +11,24 @@
 #include "flann/flann.hpp"
 #include "flann/algorithms/dist.h"
 
+#include<vcg/complex/complex.h>
+
+using namespace vcg;
+using namespace std;
+
+class MyEdge;
+class MyFace;
+class MyVertex;
+struct MyUsedTypes : public UsedTypes<	Use<MyVertex>   ::AsVertexType,
+                                        Use<MyEdge>     ::AsEdgeType,
+                                        Use<MyFace>     ::AsFaceType>{};
+
+class MyVertex  : public Vertex<MyUsedTypes, vertex::Coord3f, vertex::Normal3f, vertex::BitFlags  >{};
+class MyFace    : public Face< MyUsedTypes, face::FFAdj,  face::Normal3f, face::VertexRef, face::BitFlags > {};
+class MyEdge    : public Edge<MyUsedTypes>{};
+class MyMesh    : public tri::TriMesh< vector<MyVertex>, vector<MyFace> , vector<MyEdge>  > {};
+
+
 namespace kdtree {
 	typedef flann::Index<flann::L2<float> > KDTree;
 
@@ -35,6 +53,11 @@ namespace ppf_match_3d
  *  @return Returns the matrix on successful load
  */
 CV_EXPORTS_W Mat loadPLYSimple(const char* fileName, int withNormals = 0);
+
+CV_EXPORTS_W Mat loadPLYSimple_bin(const char* fileName, int withNormals = 0);
+
+void cvMat2vcgMesh(const Mat& pc, MyMesh& m);
+void vcgMesh2cvMat(const MyMesh& m, Mat& pc);
 
 /**
  *  @brief Write a point cloud to PLY file
@@ -79,6 +102,7 @@ void* indexPCFlann(Mat pc);
 void destroyFlann(void* flannIndex);
 void queryPCFlann(void* flannIndex, Mat& pc, Mat& indices, Mat& distances);
 void queryPCFlann(void* flannIndex, Mat& pc, Mat& indices, Mat& distances, const int numNeighbors);
+void queryPCFlannRadius(void* flannIndex, Mat& pc, Mat& indices, Mat& distances, double radius);
 
 Mat normalizePCCoeff(Mat pc, float scale, float* Cx, float* Cy, float* Cz, float* MinVal, float* MaxVal);
 Mat transPCCoeff(Mat pc, float scale, float Cx, float Cy, float Cz, float MinVal, float MaxVal);

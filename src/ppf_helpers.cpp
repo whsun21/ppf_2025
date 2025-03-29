@@ -92,7 +92,149 @@ static std::vector<std::string> split(const std::string &text, char sep) {
   return tokens;
 }
 
+void cvMat2vcgMesh(const Mat& pc, MyMesh& m)
+{
+    m.Clear();
 
+    int vertCount = pc.rows;
+    vcg::tri::Allocator<MyMesh>::AddVertices(m, vertCount);
+    for (int i = 0; i < vertCount; ++i)
+    {
+        const float* data = pc.ptr<float>(i);
+        m.vert[i].P() = vcg::Point3f(data[0], data[1], data[2]);
+        m.vert[i].N() = vcg::Point3f(data[3], data[4], data[5]);
+    }
+}
+
+void vcgMesh2cvMat(const MyMesh& m, Mat& pc)
+{
+    pc = Mat(m.vert.size(), 6, CV_32FC1);
+    for (int i = 0; i < m.vert.size(); ++i)
+    {
+        float* data = pc.ptr<float>(i);
+        vcg::Point3f n = m.vert[i].N();
+        vcg::Point3f p = m.vert[i].P();
+        //
+        //cout << p[0] << " " << p[1] << " " << p[2] << " " << n[0] << " " << n[1] << " " << n[2] << " " <<  endl;
+
+        data[0] = p[0];
+        data[1] = p[1];
+        data[2] = p[2];
+        //data[3] = n[0];
+        //data[4] = n[1];
+        //data[5] = n[2];
+
+        // normalize the normals
+        double nx = n[0], ny = n[1], nz = n[2];
+        double norm = sqrt(nx * nx + ny * ny + nz * nz);
+
+        if (norm > EPS)
+        {
+            data[3] = (float)(nx / norm);
+            data[4] = (float)(ny / norm);
+            data[5] = (float)(nz / norm);
+        }
+        else
+        {
+            data[3] = 0.0f;
+            data[4] = 0.0f;
+            data[5] = 0.0f;
+        }
+    }
+}
+
+Mat loadPLYSimple_bin(const char* fileName, int withNormals)
+{
+    //读入时前面6列为坐标和法向量
+    Mat cloud;
+
+    int numVertices = 0;
+    int numCols = 3;
+    int has_normals = 0;
+
+
+    std::ifstream ifs(fileName, std::ios::in | std::ios::binary);
+    std::string str1;
+    str1 = fileName;
+    if (!ifs.is_open())
+        std::cout << "Error opening input file: " + str1 + "\n";
+
+    /* char   buffer[80];
+    getcwd(buffer, 80);
+    printf("The   current   directory   is:   %s ", buffer);*/
+
+    std::string str;
+    while (str.substr(0, 10) != "end_header")
+    {
+        std::vector<std::string> tokens = split(str, ' ');
+        if (tokens.size() == 3)
+        {
+            if (tokens[0] == "element" && tokens[1] == "vertex")
+            {
+                numVertices = atoi(tokens[2].c_str());
+            }
+            else if (tokens[0] == "property")
+            {
+                if (tokens[2] == "nx" || tokens[2] == "normal_x")
+                {
+                    has_normals = -1;
+                    numCols += 3;
+                }
+                else if (tokens[2] == "r" || tokens[2] == "red")
+                {
+                    //has_color = true;
+                    numCols += 3;
+                }
+                else if (tokens[2] == "a" || tokens[2] == "alpha")
+                {
+                    //has_alpha = true;
+                    numCols += 1;
+                }
+            }
+        }
+        else if (tokens.size() > 1 && tokens[0] == "format" && tokens[1] != "ascii")
+            std::cout << "Cannot read file, only ascii ply format is currently supported...\n";
+        std::getline(ifs, str);
+    }
+    withNormals &= has_normals;
+
+    cloud = Mat(numVertices, withNormals ? 6 : 3, CV_32FC1);
+    //Eigen::Matrix<float,numVertices, withNormals ? 6 : 3,RowMajor> eigMatRow;
+
+    std::cout << "模型点数：" << numVertices << "  法向量状态：" << withNormals << std::endl;
+
+    int n = 0;
+    for (int i = 0; i < numVertices; )
+    {
+        float fea[6];
+        if (ifs.read((char*)&fea[0], 6 * sizeof(float)))
+        {
+
+            for (int col = 0; col < 6; ++col)
+            {
+                cloud.at<float>(i, col) = fea[col];
+            }
+
+            if (withNormals)//模型归一化
+            {
+                // normalize to unit norm
+                double norm = sqrt(cloud.at<float>(i, 3) * cloud.at<float>(i, 3) + cloud.at<float>(i, 4) * cloud.at<float>(i, 4) + cloud.at<float>(i, 5) * cloud.at<float>(i, 5));
+                if (norm > 0.00001)
+                {
+                    cloud.at<float>(i, 3) /= static_cast<float>(norm);
+                    cloud.at<float>(i, 4) /= static_cast<float>(norm);
+                    cloud.at<float>(i, 5) /= static_cast<float>(norm);
+                }
+            }
+            i++;
+        }
+
+
+    }
+
+    //cloud *= 5.0f;
+    return cloud;
+}
 
 Mat loadPLYSimple(const char* fileName, int withNormals)
 {
@@ -327,6 +469,13 @@ void queryPCFlann(void* flannIndex, Mat& pc, Mat& indices, Mat& distances, const
   Mat obj_32f;
   pc.colRange(0, 3).copyTo(obj_32f);
   ((FlannIndex*)flannIndex)->knnSearch(obj_32f, indices, distances, numNeighbors, cvflann::SearchParams(32));
+}
+
+void queryPCFlannRadius(void* flannIndex, Mat& pc, Mat& indices, Mat& distances, double radius)
+{
+    Mat obj_32f;
+    pc.colRange(0, 3).copyTo(obj_32f);
+    ((FlannIndex*)flannIndex)->radiusSearch(obj_32f, indices, distances, radius, cvflann::SearchParams(32));
 }
 
 Mat samplePCByQuantization_normal(Mat pc, Vec2f& xrange, Vec2f& yrange, Vec2f& zrange, float sampleStep, float anglethreshold, int level)
