@@ -2,6 +2,7 @@
 // Author: Tolga Birdal <tbirdal AT gmail.com>
 
 #include "precomp.hpp"
+#include <boost/algorithm/string.hpp>
 
 namespace kdtree {
 
@@ -70,6 +71,93 @@ namespace cv
 {
 namespace ppf_match_3d
 {
+
+int writeMap(const map<string, vector<double>>& m, const string& outPath) {
+    //map<string, vector<double>> m = { {"1th", vector<double>{0,1,2}} , {"2th", vector<double>{0,1,2}} };
+    // 存入文件out.txt
+    ofstream of(outPath);
+    for (const auto& i : m) {
+        of << i.first << ' ';
+        for (auto& v : i.second)
+            of << v << ' ';
+        of << std::endl;
+    }
+    of.close();
+    return 0;
+}
+
+int writeMap(const map<string, vector<string>>& m, const string& outPath) {
+    //map<string, vector<double>> m = { {"1th", vector<double>{0,1,2}} , {"2th", vector<double>{0,1,2}} };
+    // 存入文件out.txt
+    ofstream of(outPath);
+    for (const auto& i : m) {
+        of << i.first << ' ';
+        for (auto& v : i.second)
+            of << v << ' ';
+        of << std::endl;
+    }
+    of.close();
+    return 0;
+}
+
+int writeMap(const map<string, double>& m, const string& outPath) {
+    //map<string, vector<double>> m = { {"1th", vector<double>{0,1,2}} , {"2th", vector<double>{0,1,2}} };
+    // 存入文件out.txt
+    ofstream of(outPath);
+    for (const auto& i : m) {
+        of << i.first << ' ' << i.second << std::endl;
+    }
+    of.close();
+    return 0;
+}
+
+int readMap(map<string, vector<double>>& m2, const string& inPath) {
+    // 读取文件，存入map m2中
+    //map<string, vector<double>> m2;
+    ifstream iff(inPath);
+    if (!iff.is_open()) { cout << "not open: " << inPath << endl; exit(1); }
+    string keyval;
+    while (getline(iff, keyval)) {
+        std::vector<std::string> mStr;
+        boost::split(mStr, keyval, boost::is_any_of(" "));
+        for (int i = 1; i < mStr.size() - 1; i++)
+            m2[mStr[0]].push_back(stod(mStr[i]));
+    }
+    iff.close();
+    return 0;
+}
+
+int readMap(map<string, vector<string>>& m2, const string& inPath) {
+    // 读取文件，存入map m2中
+    //map<string, vector<double>> m2;
+    ifstream iff(inPath);
+    if (!iff.is_open()) { cout << "not open: " << inPath << endl; exit(1); }
+    string keyval;
+    while (getline(iff, keyval)) {
+        std::vector<std::string> mStr;
+        boost::split(mStr, keyval, boost::is_any_of(" "));
+        for (int i = 1; i < mStr.size() - 1; i++)
+            m2[mStr[0]].push_back(mStr[i]);
+    }
+    iff.close();
+    return 0;
+}
+
+int readMap(map<string, double>& m2, const string& inPath) {
+    // 读取文件，存入map m2中
+    //map<string, vector<double>> m2;
+    ifstream iff(inPath);
+    if (!iff.is_open()) { cout << "not open: " << inPath << endl; exit(1); }
+    string keyval;
+    while (getline(iff, keyval)) {
+        std::vector<std::string> mStr;
+        boost::split(mStr, keyval, boost::is_any_of(" "));
+        m2[mStr[0]] = stod(mStr[1]);
+    }
+    iff.close();
+    return 0;
+}
+
 
 typedef cv::flann::L2<float> Distance_32F;
 typedef cv::flann::GenericIndex< Distance_32F > FlannIndex;

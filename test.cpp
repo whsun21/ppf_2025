@@ -10,6 +10,7 @@
 #include "opencv2/core/utility.hpp"
 
 #include <boost/algorithm/string.hpp>
+#include <Windows.h>
 
 
 using namespace std;
@@ -17,66 +18,47 @@ using namespace cv;
 using namespace ppf_match_3d;
 
 int testUwa() {
-
     string dataName = "UWA";
-    cout << "test " << dataName << endl;
+    string method = "ppf_2025";
+    cout << "test " << method << " on dataset " << dataName << endl;
 
-    string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/UWA/";
+    //para
+    // model
+    double relativeSamplingStep = 0.025;
+    // match
+    double keypointStep = 5;
+    double relativeSceneDistance = 0.025;
+    int N = 1;
+    // Create an instance of ICP
+    ICP icp(5, 0.005f, .05f, 3); //100, 0.005f, 2.5f, 8
+    //path
+    string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/" + dataName + "/";
     string configPath = "3D models/Mian/";
-    string predPath = "D:/wenhao.sun/Documents/GitHub/1-project/Halcon_benchmark/halconResults/uwa/";
+
     string modelPath = rootPath + configPath;
+    string predPath = "D:/wenhao.sun/Documents/GitHub/1-project/testResults/" + method + "Results/" + dataName + "/";
 
+    // cfg file
+    //auto& cfgName = cfgNameAll[icfg];
+    //string cfgName = "ConfigScene1.ini";
+    //string cfgPath0 = rootPath + configPath + cfgName;//cfgName
+    //LPCTSTR cfgPath = cfgPath0.c_str();
+
+    // 提前读取模型
     vector<string> uwaModelName{ "parasaurolophus_high", "cheff", "chicken_high", "T-rex_high" };
-    //cout << uwaModelName[0] << endl;
-    map< string, vector<double>> ADDMap;
-    map< string, vector<double>> ADIMap;
-    map< string, vector<double>> centerErrorMap;
-    map< string, vector<double>> phiMap;
-    map< string, vector<double>> dNormMap;
-    map< string, vector<double>> timeMap;
-    map< string, vector<double>> occulsionMap;
-
-    for (int i = 0; i < uwaModelName.size(); i++) {
-        ADDMap[uwaModelName[i]] = vector<double>();
-        ADIMap[uwaModelName[i]] = vector<double>();
-        centerErrorMap[uwaModelName[i]] = vector<double>();
-        phiMap[uwaModelName[i]] = vector<double>();
-        dNormMap[uwaModelName[i]] = vector<double>();
-        timeMap[uwaModelName[i]] = vector<double>();
-        occulsionMap[uwaModelName[i]] = vector<double>();
-    }
-    string ADDName = "../eval_" + dataName + (string)"/eval_ADD.txt";
-    string ADIName = "../eval_" + dataName + (string)"/eval_ADI.txt";
-    string centerErrorName = "../eval_" + dataName + (string)"/eval_centerError.txt";
-    string phiName = "../eval_" + dataName + (string)"/eval_phi.txt";
-    string dNormName = "../eval_" + dataName + (string)"/eval_dNorm.txt";
-    string timeName = "../eval_" + dataName + (string)"/eval_time.txt";
-    string occulsionName = "../eval_" + dataName + (string)"/eval_occulsion.txt";
-
-    // 计算直径, center point
-    map<string, double> Diamters;
-    map<string, Vec3f> Centers;
     map<string, Mat> modelPC;
     string modelFilePath;
     for (int i = 0; i < uwaModelName.size(); i++) {
         modelFilePath = modelPath + uwaModelName[i] + "_0.ply";
-        Mat pc = loadPLYSimple(modelFilePath.c_str(), 1);
-        modelPC[uwaModelName[i]] = pc;
-        Vec2f xRange, yRange, zRange;
-        computeBboxStd(pc, xRange, yRange, zRange);
-        float dx = xRange[1] - xRange[0];
-        float dy = yRange[1] - yRange[0];
-        float dz = zRange[1] - zRange[0];
-        float diameter = sqrt(dx * dx + dy * dy + dz * dz);
-        Diamters[uwaModelName[i]] = diameter;
 
-        Vec3f center;
-        center[0] = (xRange[1] + xRange[0]) / 2;
-        center[1] = (yRange[1] + yRange[0]) / 2;
-        center[2] = (zRange[1] + zRange[0]) / 2;
-        Centers[uwaModelName[i]] = center;
+        MyMesh pcM;
+        vcg::tri::io::ImporterPLY<MyMesh>::Open(pcM, modelFilePath.c_str());
+        Mat pc;
+        vcgMesh2cvMat(pcM, pc);
+
+        //Mat pc = loadPLYSimple(modelFilePath.c_str(), 1);
+        modelPC[uwaModelName[i]] = pc;
     }
-    string DiamtersName = "../eval_" + dataName + (string)"/eval_Diamters.txt";
 
 
     // 所有场景
@@ -96,42 +78,59 @@ int testUwa() {
         string cfgPath0 = rootPath + configPath + cfgName;//cfgName
         LPCTSTR cfgPath = cfgPath0.c_str();
 
-        // 多个模型
+        // reaf scene path from cfg
+        LPSTR  scenePath0 = new char[1024];
+        GetPrivateProfileString("SCENE", "PATH", "NULL", scenePath0, 512, cfgPath);
+        string sceneName;  //用来索引已经读取的模型点云
+        {
+            std::vector<std::string> mStr, mn;
+            boost::split(mStr, scenePath0, boost::is_any_of("/"));
+            boost::split(mn, *(mStr.end() - 1), boost::is_any_of("."));
+            sceneName = mn[0];
+        }
+        string sceneFileName = rootPath + configPath + sceneName + "_0.ply";
 
+        //string sceneFileName = modelPath + "rs1_0.ply";
+        // Read scene
+        MyMesh pcS;
+        vcg::tri::io::ImporterPLY<MyMesh>::Open(pcS, sceneFileName.c_str());
+        if (pcS.face.size() == 0) {
+            cout << "Scene has no face. Need faces for normal computing by PerVertexFromCurrentFaceNormal" << endl;
+            return -1;
+        }
+        tri::UpdateNormal<MyMesh>::PerFace(pcS);
+        tri::UpdateNormal<MyMesh>::PerVertexFromCurrentFaceNormal(pcS);
+        tri::UpdateNormal<MyMesh>::NormalizePerVertex(pcS);
+        Mat pcTest;
+        vcgMesh2cvMat(pcS, pcTest);
+
+        // 多个模型在单个场景中
+        // read cfg model num
         LPSTR  modelNumCh = new char[1024];
         GetPrivateProfileString("MODELS", "NUMBER", "NULL", modelNumCh, 512, cfgPath);
         int modelNum = atoi(modelNumCh);
-        string modelKey, modelGTKey, modelOccluKey;
+        string modelKey, modelGTKey;
+
         for (int i = 0; i < modelNum; i++) {
             modelKey = "MODEL_" + to_string(i);
             modelGTKey = modelKey + "_GROUNDTRUTH";
-            modelOccluKey = modelKey + "_OCCLUSION";
 
             // 单个模型
-            // read mdoel
+            // read cfg mdoel path
             LPSTR  modelPath0 = new char[1024];
             GetPrivateProfileString("MODELS", modelKey.c_str(), "NULL", modelPath0, 512, cfgPath);
-            string mPath1 = rootPath + modelPath0;
-
-            string modelNameInCfg;
+            string modelNameInCfg;  //用来索引已经读取的模型点云
             {
                 std::vector<std::string> mStr, mn;
-                boost::split(mStr, mPath1, boost::is_any_of("/"));
+                boost::split(mStr, modelPath0, boost::is_any_of("/"));
                 boost::split(mn, *(mStr.end() - 1), boost::is_any_of("."));
                 modelNameInCfg = mn[0];
             }
 
-
-            //string mPath = mPath1.substr(0, mPath1.length() - 4) + "_0.ply";
-            //Mat pc = loadPLYSimple(mPath.c_str(), 1);
-            //Vec3f p1(pc.ptr<float>(0));
-
-
-            // read gt 
+            // read cfg gt 
             LPSTR  gtPath0 = new char[1024];
             GetPrivateProfileString("MODELS", modelGTKey.c_str(), "NULL", gtPath0, 512, cfgPath);
-            string gtPath = rootPath + gtPath0;
-            string gtName;
+            string gtName; // 真实的位姿结果文件，用来名名预测的位姿结果文件
             {
                 std::vector<std::string> mStr, mn;
                 boost::split(mStr, gtPath0, boost::is_any_of("/"));
@@ -139,16 +138,109 @@ int testUwa() {
                 gtName = mn[0];
             }
 
-            ifstream gt_ifs(gtPath);
-            if (!gt_ifs.is_open()) { cout << "not open: " << gtPath << endl; exit(1); }
-            Matx44d gt_pose;
-            for (int ii = 0; ii < 4; ii++)
-                for (int jj = 0; jj < 4; jj++)
-                {
-                    gt_ifs >> gt_pose(ii, jj);
-                }
-            gt_ifs.close();
+            // 索引模型
+            Mat& pc = modelPC[modelNameInCfg];
 
+            // train the model
+            ppf_match_3d::PPF3DDetector detector(relativeSamplingStep);//0.025
+            //detector.enableDebug(true);
+            detector.trainModel(pc);
+
+
+            //timer
+            int64 t1 = cv::getTickCount();
+
+
+            // Match the model to the scene and get the pose
+            vector<Pose3DPtr> results;
+            detector.match(pcTest, results, 1.0 / keypointStep, relativeSceneDistance); //1.0/40.0, 0.05；作者建议1.0/5.0，0.025
+
+            //check results size from match call above
+            size_t results_size = results.size();
+            if (results_size == 0) {
+                cout << modelNameInCfg << endl << sceneFileName << endl << "No matching poses found. Exiting." << endl;
+                exit(0);
+            }
+
+            // 后处理
+            int postPoseNum = 100;
+            if (results_size < postPoseNum) postPoseNum = results_size;
+            vector<Pose3DPtr> resultsPost(results.begin(), results.begin() + postPoseNum);
+
+            bool refineEnabled = true;
+            bool nmsEnabled = true;
+            detector.postProcessing(resultsPost, icp, refineEnabled, nmsEnabled); /////////
+
+            // timer 
+            int64 t2 = cv::getTickCount();
+
+            // Get only first N results - but adjust to results size if num of results are less than that specified by N
+            if (resultsPost.size() < N) {
+                cout << endl << "Reducing matching poses to be reported (as specified in code): "
+                    << N << " to the number of matches found: " << resultsPost.size() << endl;
+                N = resultsPost.size();
+            }
+            vector<Pose3DPtr> resultsSub(resultsPost.begin(), resultsPost.begin() + N);
+
+            // 保存位姿，目前支持一个
+            Matx44d pose = resultsSub[0]->pose;
+            //cout << pose << endl;
+
+            string predName = predPath + gtName + ".txt";
+            ofstream of(predName);
+            of << modelNameInCfg << endl;
+            of << "time=" << (t2 - t1) / cv::getTickFrequency() << endl;
+            of << pose(0, 0) << " " << pose(0, 1) << " " << pose(0, 2) << " " << pose(0, 3) << endl;
+            of << pose(1, 0) << " " << pose(1, 1) << " " << pose(1, 2) << " " << pose(1, 3) << endl;
+            of << pose(2, 0) << " " << pose(2, 1) << " " << pose(2, 2) << " " << pose(2, 3) << endl;
+            of << pose(3, 0) << " " << pose(3, 1) << " " << pose(3, 2) << " " << pose(3, 3) << endl;
+            of.close();
+        }
+    }
+
+
+
+
+
+}
+
+int debugUwaFailureCases(string& Method) {
+    string method = Method;
+    cout << "*****************************  " << method << "  *****************************" << endl;
+    string dataName = "UWA";
+    cout << "debug Failure Cases: " << dataName << endl;
+
+    string evalFileRootPath = "D:/wenhao.sun/Documents/GitHub/1-project/eval/" + method + "Eval/" + dataName + "/";
+    // failure case的文件名
+    string failureCaseADICenterFilePath = evalFileRootPath + method + "FailureCasesADICenter.txt";
+    string failureCaseADICenterOcclusionFilePath = evalFileRootPath + method + "FailureCasesADICenterOcclusion.txt";
+    
+    string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/" + dataName + "/";
+    string configPath = "3D models/Mian/";
+    string modelPath = rootPath + configPath;
+    string predPath = "D:/wenhao.sun/Documents/GitHub/1-project/testResults/" + method + "Results/" + dataName + "/";
+
+    map< string, vector<string>> failureCaseADICenterTableMap;
+    map< string, vector<double>> failureCaseADICenterOcclusionTableMap;
+    readMap(failureCaseADICenterTableMap, failureCaseADICenterFilePath);
+    readMap(failureCaseADICenterOcclusionTableMap, failureCaseADICenterOcclusionFilePath);
+    
+    string modelName, modelFilePath, gtName_sceneName, gtName;
+    for (auto it = failureCaseADICenterTableMap.begin(); it != failureCaseADICenterTableMap.end(); ++it) {
+        modelName = it->first;
+
+        modelFilePath = modelPath + modelName + "_0.ply";
+        MyMesh pcM;
+        vcg::tri::io::ImporterPLY<MyMesh>::Open(pcM, modelFilePath.c_str());
+        Mat pc;
+        vcgMesh2cvMat(pcM, pc);
+
+        int fcNum= it->second.size();
+        for (int i = 0; i < fcNum; i++) {
+            gtName_sceneName = it->second[i]; // "gtName"+ "_" + "sceneName"
+            std::vector<std::string> mStr;
+            boost::split(mStr, gtName_sceneName, boost::is_any_of("_"));
+            gtName = mStr[0];  //也是pred name
 
             // read pred
             string predFilePath = predPath + gtName + ".txt";
@@ -157,14 +249,8 @@ int testUwa() {
 
             string modelNameInPred;
             getline(pred_ifs, modelNameInPred); ////////
-            if (modelNameInPred != modelNameInCfg) { cout << "not same: " << "gt " << gtPath << "pred " << predFilePath << endl; exit(1); }
             string timeStr;
             getline(pred_ifs, timeStr);
-            int n = timeStr.find("=");
-            string timeStr2 = timeStr.substr(n + 1, timeStr.length() - n);
-            //cout << timeStr2 << endl;
-            double time = stod(timeStr2, 0);
-            timeMap[modelNameInPred].push_back(time);
 
             Matx44d pred_pose;
             for (int ii = 0; ii < 4; ii++)
@@ -174,112 +260,15 @@ int testUwa() {
                 }
             pred_ifs.close();
 
-            // read occulsion
-            LPSTR  occlu = new char[1024];
-            GetPrivateProfileString("MODELS", modelOccluKey.c_str(), "NULL", occlu, 512, cfgPath);
-            string occlus = occlu;
-            double occlud = stod(occlus);
-            occulsionMap[modelNameInPred].push_back(occlud);
+            Mat pct = transformPCPose(pc, pred_pose);
+            string debugName = "../samples/data/results/debug_" + method + "_" + dataName + "/" + gtName+".ply";
 
-            // ADD
-            Mat& pc = modelPC[modelNameInPred];
-            Mat pct_gt = transformPCPose(pc, gt_pose); //pc是原始模型
-            Mat pct_pred = transformPCPose(pc, pred_pose); //pc是原始模型
-
-            double totalD_ADD = 0;
-            for (int ii = 0; ii < pct_gt.rows; ii++)
-            {
-                Vec3f v1(pct_gt.ptr<float>(ii));
-                //const Vec3f n1(pct_gt.ptr<float>(ii) + 3);
-                Vec3f v2(pct_pred.ptr<float>(ii));
-                v1 = v1 - v2;
-                totalD_ADD += cv::norm(v1);
-            }
-            totalD_ADD /= pct_gt.rows;
-            ADDMap[modelNameInCfg].push_back(totalD_ADD);
-
-            // ADI
-            Mat features;
-            Mat queries;
-            pct_gt.colRange(0, 3).copyTo(features);
-            pct_pred.colRange(0, 3).copyTo(queries);
-
-            //cout << pc.at<float>(0, 0) << pc.at<float>(0, 1) << pc.at<float>(0, 2) << endl;
-
-            KDTree* model_tree = BuildKDTree(features);
-            std::vector<std::vector<int>> indices;
-            std::vector<std::vector<float>> dists;
-            SearchKDTree(model_tree, queries, indices, dists, 1);
-            delete model_tree;
-            double totalD_ADI = 0;
-            for (int ii = 0; ii < queries.rows; ii++)
-            {
-                totalD_ADI += sqrt(dists[ii][0]);
-            }
-            totalD_ADI /= queries.rows;
-            ADIMap[modelNameInCfg].push_back(totalD_ADI);
-
-            //centerError
-            Vec3f centerV = Centers[modelNameInCfg];
-            Mat center = Mat(1, centerV.rows, CV_32F);
-            float* pcData = center.ptr<float>(0);
-            pcData[0] = (float)centerV[0];
-            pcData[1] = (float)centerV[1];
-            pcData[2] = (float)centerV[2];
-
-            //cout << center.row(0) << endl;
-            Mat ctt_gt = transformPCPose(center, gt_pose); //pc是原始模型
-            Mat ctt_pred = transformPCPose(center, pred_pose); //pc是原始模型
-            Vec3f cd = ctt_gt.at<Vec3f>(0) - ctt_pred.at<Vec3f>(0);
-            //cout << ctt_gt.at<Vec3f>(0) << endl;
-            //cout << ctt_pred.at<Vec3f>(0) << endl;
-            //cout << cd << endl;
-            centerErrorMap[modelNameInCfg].push_back(cv::norm(cd));
-
-            // manifold 
-            Eigen::Matrix<double, 4, 4> gtMatrix;
-            cv::cv2eigen(gt_pose, gtMatrix); // cv::Mat 转换成 Eigen::Matrix
-            Eigen::Affine3f gtPose;
-            gtPose.matrix() = gtMatrix.cast<float>();
-            //cout << gtPose.rotation() << endl;
-            //cout << gtPose.translation() << endl;
-
-            Eigen::Matrix<double, 4, 4> predMatrix;
-            cv::cv2eigen(pred_pose, predMatrix); // cv::Mat 转换成 Eigen::Matrix
-            Eigen::Affine3f predPose;
-            predPose.matrix() = predMatrix.cast<float>();
-
-            Eigen::Matrix3f RtRsInv(gtPose.rotation().inverse().lazyProduct(predPose.rotation()).eval());
-            Eigen::AngleAxisf rotation_diff_mat(RtRsInv); //tr(Rs.inv * Rt) = tr(Rt * Rs.inv)
-            double phi = std::abs(rotation_diff_mat.angle());
-            float dNorm = (gtPose.translation() - predPose.translation()).norm();
-            phiMap[modelNameInCfg].push_back(phi);
-            dNormMap[modelNameInCfg].push_back(dNorm);
+            writePLY(pct, debugName.c_str());
         }
     }
 
 
-    // 保存误差结果
-    writeMap(ADDMap, ADDName);
-    writeMap(ADIMap, ADIName);
-    writeMap(centerErrorMap, centerErrorName);
-    writeMap(phiMap, phiName);
-    writeMap(dNormMap, dNormName);
-    writeMap(timeMap, timeName);
-    writeMap(occulsionMap, occulsionName);
-    writeMap(Diamters, DiamtersName);
-
-    int instancesNum(0);
-    for (auto it = ADDMap.begin(); it != ADDMap.end(); ++it) {
-        instancesNum += it->second.size();
-        cout << it->first << ": " << it->second.size() << endl;
-    }
-    cout << "Total: " << instancesNum << endl;  //188
-
-
-    return 0;
 }
-
 
 int main() {
 #if (defined __x86_64__ || defined _M_X64)
@@ -293,6 +282,12 @@ int main() {
 #else
     cout << "Running without OpenMP and without TBB" << endl;
 #endif
+    //string method = "halcon";
+    string method = "ppf_2025";
+
+
+    //testUwa();
+    debugUwaFailureCases(method);
 
 }
 
@@ -369,6 +364,7 @@ int main1(int argc, char** argv)
     cout << "Training..." << endl;
     int64 tick1 = cv::getTickCount();
     ppf_match_3d::PPF3DDetector detector(0.025, 0.025);//0.025, 0.05
+    detector.enableDebug(true);
     detector.trainModel(pc); //// pc_vcg
     int64 tick2 = cv::getTickCount();
     cout << endl << "Training complete in "

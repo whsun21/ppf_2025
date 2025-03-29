@@ -10,30 +10,29 @@
 
 #include <Windows.h>
 #include <fstream>
-#include <boost/algorithm/string.hpp>
 #include "Eigen/Dense"
 #include <opencv2/core/eigen.hpp>
-#include <map>
+#include <boost/algorithm/string.hpp>
 
 using namespace std;
 using namespace cv;
 using namespace ppf_match_3d;
 using namespace kdtree;
 
-int writeMap(const map<string, vector<double>>& m, const string& outPath);
-int writeMap(const map<string, double>& m, const string& outPath);
-int readMap(map<string, vector<double>>& m2, const string& inPath);
-int readMap(map<string, double>& m2, const string& inPath);
 
 
-int evalUwa() {
-    cout << "eval UWA" << endl;
+int evalUwa(string & Method) {
+    string method = Method;
+    cout << "*****************************  " << method << "  *****************************" << endl;
+
     string dataName = "UWA";
+    cout << "eval " << dataName << endl;
 
-    string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/UWA/";
+    string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/"+ dataName + "/";
     string configPath = "3D models/Mian/";
-    string predPath = "D:/wenhao.sun/Documents/GitHub/1-project/Halcon_benchmark/halconResults/uwa/";
+    string predPath = "D:/wenhao.sun/Documents/GitHub/1-project/testResults/" + method + "Results/" + dataName + "/";
     string modelPath = rootPath + configPath;
+    string evalFileRootPath = "D:/wenhao.sun/Documents/GitHub/1-project/eval/" + method + "Eval/" + dataName + "/";
 
     vector<string> uwaModelName{ "parasaurolophus_high", "cheff", "chicken_high", "T-rex_high" };
     //cout << uwaModelName[0] << endl;
@@ -44,6 +43,7 @@ int evalUwa() {
     map< string, vector<double>> dNormMap;
     map< string, vector<double>> timeMap;
     map< string, vector<double>> occulsionMap;
+    map< string, vector<string>> checkTableMap;
 
     for (int i = 0; i < uwaModelName.size(); i++) {
         ADDMap[uwaModelName[i]] = vector<double>();
@@ -53,14 +53,17 @@ int evalUwa() {
         dNormMap[uwaModelName[i]] = vector<double>();
         timeMap[uwaModelName[i]] = vector<double>();
         occulsionMap[uwaModelName[i]] = vector<double>();
+        checkTableMap[uwaModelName[i]] = vector<string>();
     }
-    string ADDName = "../eval_" + dataName + (string)"/eval_ADD.txt";
-    string ADIName = "../eval_" + dataName + (string)"/eval_ADI.txt";
-    string centerErrorName = "../eval_" + dataName + (string)"/eval_centerError.txt";
-    string phiName = "../eval_" + dataName + (string)"/eval_phi.txt";
-    string dNormName = "../eval_" + dataName + (string)"/eval_dNorm.txt";
-    string timeName = "../eval_" + dataName + (string)"/eval_time.txt";
-    string occulsionName = "../eval_" + dataName + (string)"/eval_occulsion.txt";
+    string ADDName              = evalFileRootPath + (string)"/eval_ADD.txt";
+    string ADIName              = evalFileRootPath + (string)"/eval_ADI.txt";
+    string centerErrorName      = evalFileRootPath + (string)"/eval_centerError.txt";
+    string phiName              = evalFileRootPath + (string)"/eval_phi.txt";
+    string dNormName            = evalFileRootPath + (string)"/eval_dNorm.txt";
+    string timeName             = evalFileRootPath + (string)"/eval_time.txt";
+    string occulsionName        = evalFileRootPath + (string)"/eval_occulsion.txt";
+    string DiamtersName         = evalFileRootPath + (string)"/eval_Diamters.txt";
+    string checkTableName       = evalFileRootPath + (string)"/checkTable.txt";
 
     // 计算直径, center point
     map<string, double> Diamters;
@@ -85,7 +88,6 @@ int evalUwa() {
         center[2] = (zRange[1] + zRange[0]) / 2;
         Centers[uwaModelName[i]] = center;
     }
-    string DiamtersName = "../eval_" + dataName + (string)"/eval_Diamters.txt";
 
 
     // 所有场景
@@ -183,103 +185,119 @@ int evalUwa() {
                 }
             pred_ifs.close();
 
-            // read occulsion
-            LPSTR  occlu = new char[1024];
-            GetPrivateProfileString("MODELS", modelOccluKey.c_str(), "NULL", occlu, 512, cfgPath);
-            string occlus = occlu;
-            double occlud = stod(occlus);
-            occulsionMap[modelNameInPred].push_back(occlud);
-
-            // ADD
-            Mat& pc = modelPC[modelNameInPred];
-            Mat pct_gt = transformPCPose(pc, gt_pose); //pc是原始模型
-            Mat pct_pred = transformPCPose(pc, pred_pose); //pc是原始模型
-
-            double totalD_ADD = 0;
-            for (int ii = 0; ii < pct_gt.rows; ii++)
+            // build check table
+            // reaf scene path from cfg
+            LPSTR  scenePath0 = new char[1024];
+            GetPrivateProfileString("SCENE", "PATH", "NULL", scenePath0, 512, cfgPath);
+            string sceneName;  //用来索引已经读取的模型点云
             {
-                Vec3f v1(pct_gt.ptr<float>(ii));
-                //const Vec3f n1(pct_gt.ptr<float>(ii) + 3);
-                Vec3f v2(pct_pred.ptr<float>(ii));
-                v1 = v1 - v2;
-                totalD_ADD += cv::norm(v1);
+                std::vector<std::string> mStr, mn;
+                boost::split(mStr, scenePath0, boost::is_any_of("/"));
+                boost::split(mn, *(mStr.end() - 1), boost::is_any_of("."));
+                sceneName = mn[0];
             }
-            totalD_ADD /= pct_gt.rows;
-            ADDMap[modelNameInCfg].push_back(totalD_ADD);
+            string str = gtName + "_" + sceneName; ////////////////////////
+            checkTableMap[modelNameInPred].push_back(str);
 
-            // ADI
-            Mat features;
-            Mat queries;
-            pct_gt.colRange(0, 3).copyTo(features);
-            pct_pred.colRange(0, 3).copyTo(queries);
+            //// read occulsion
+            //LPSTR  occlu = new char[1024];
+            //GetPrivateProfileString("MODELS", modelOccluKey.c_str(), "NULL", occlu, 512, cfgPath);
+            //string occlus = occlu;
+            //double occlud = stod(occlus);
+            //occulsionMap[modelNameInPred].push_back(occlud);
 
-            //cout << pc.at<float>(0, 0) << pc.at<float>(0, 1) << pc.at<float>(0, 2) << endl;
+            //// ADD
+            //Mat& pc = modelPC[modelNameInPred];
+            //Mat pct_gt = transformPCPose(pc, gt_pose); //pc是原始模型
+            //Mat pct_pred = transformPCPose(pc, pred_pose); //pc是原始模型
 
-            KDTree* model_tree = BuildKDTree(features);
-            std::vector<std::vector<int>> indices;
-            std::vector<std::vector<float>> dists;
-            SearchKDTree(model_tree, queries, indices, dists, 1);
-            delete model_tree;
-            double totalD_ADI = 0;
-            for (int ii = 0; ii < queries.rows; ii++)
-            {
-                totalD_ADI += sqrt(dists[ii][0]);
-            }
-            totalD_ADI /= queries.rows;
-            ADIMap[modelNameInCfg].push_back(totalD_ADI);
+            //double totalD_ADD = 0;
+            //for (int ii = 0; ii < pct_gt.rows; ii++)
+            //{
+            //    Vec3f v1(pct_gt.ptr<float>(ii));
+            //    //const Vec3f n1(pct_gt.ptr<float>(ii) + 3);
+            //    Vec3f v2(pct_pred.ptr<float>(ii));
+            //    v1 = v1 - v2;
+            //    totalD_ADD += cv::norm(v1);
+            //}
+            //totalD_ADD /= pct_gt.rows;
+            //ADDMap[modelNameInCfg].push_back(totalD_ADD);
 
-            //centerError
-            Vec3f centerV = Centers[modelNameInCfg];
-            Mat center = Mat(1, centerV.rows, CV_32F);
-            float* pcData = center.ptr<float>(0);
-            pcData[0] = (float)centerV[0];
-            pcData[1] = (float)centerV[1];
-            pcData[2] = (float)centerV[2];
+            //// ADI
+            //Mat features;
+            //Mat queries;
+            //pct_gt.colRange(0, 3).copyTo(features);
+            //pct_pred.colRange(0, 3).copyTo(queries);
 
-            //cout << center.row(0) << endl;
-            Mat ctt_gt = transformPCPose(center, gt_pose); //pc是原始模型
-            Mat ctt_pred = transformPCPose(center, pred_pose); //pc是原始模型
-            Vec3f cd = ctt_gt.at<Vec3f>(0) - ctt_pred.at<Vec3f>(0);
-            //cout << ctt_gt.at<Vec3f>(0) << endl;
-            //cout << ctt_pred.at<Vec3f>(0) << endl;
-            //cout << cd << endl;
-            centerErrorMap[modelNameInCfg].push_back(cv::norm(cd));
+            ////cout << pc.at<float>(0, 0) << pc.at<float>(0, 1) << pc.at<float>(0, 2) << endl;
 
-            // manifold 
-            Eigen::Matrix<double, 4, 4> gtMatrix;
-            cv::cv2eigen(gt_pose, gtMatrix); // cv::Mat 转换成 Eigen::Matrix
-            Eigen::Affine3f gtPose;
-            gtPose.matrix() = gtMatrix.cast<float>();
-            //cout << gtPose.rotation() << endl;
-            //cout << gtPose.translation() << endl;
+            //KDTree* model_tree = BuildKDTree(features);
+            //std::vector<std::vector<int>> indices;
+            //std::vector<std::vector<float>> dists;
+            //SearchKDTree(model_tree, queries, indices, dists, 1);
+            //delete model_tree;
+            //double totalD_ADI = 0;
+            //for (int ii = 0; ii < queries.rows; ii++)
+            //{
+            //    totalD_ADI += sqrt(dists[ii][0]);
+            //}
+            //totalD_ADI /= queries.rows;
+            //ADIMap[modelNameInCfg].push_back(totalD_ADI);
 
-            Eigen::Matrix<double, 4, 4> predMatrix;
-            cv::cv2eigen(pred_pose, predMatrix); // cv::Mat 转换成 Eigen::Matrix
-            Eigen::Affine3f predPose;
-            predPose.matrix() = predMatrix.cast<float>();
+            ////centerError
+            //Vec3f centerV = Centers[modelNameInCfg];
+            //Mat center = Mat(1, centerV.rows, CV_32F);
+            //float* pcData = center.ptr<float>(0);
+            //pcData[0] = (float)centerV[0];
+            //pcData[1] = (float)centerV[1];
+            //pcData[2] = (float)centerV[2];
 
-            Eigen::Matrix3f RtRsInv(gtPose.rotation().inverse().lazyProduct(predPose.rotation()).eval());
-            Eigen::AngleAxisf rotation_diff_mat(RtRsInv); //tr(Rs.inv * Rt) = tr(Rt * Rs.inv)
-            double phi = std::abs(rotation_diff_mat.angle());
-            float dNorm = (gtPose.translation() - predPose.translation()).norm();
-            phiMap[modelNameInCfg].push_back(phi);
-            dNormMap[modelNameInCfg].push_back(dNorm);
+            ////cout << center.row(0) << endl;
+            //Mat ctt_gt = transformPCPose(center, gt_pose); //pc是原始模型
+            //Mat ctt_pred = transformPCPose(center, pred_pose); //pc是原始模型
+            //Vec3f cd = ctt_gt.at<Vec3f>(0) - ctt_pred.at<Vec3f>(0);
+            ////cout << ctt_gt.at<Vec3f>(0) << endl;
+            ////cout << ctt_pred.at<Vec3f>(0) << endl;
+            ////cout << cd << endl;
+            //centerErrorMap[modelNameInCfg].push_back(cv::norm(cd));
+
+            //// manifold 
+            //Eigen::Matrix<double, 4, 4> gtMatrix;
+            //cv::cv2eigen(gt_pose, gtMatrix); // cv::Mat 转换成 Eigen::Matrix
+            //Eigen::Affine3f gtPose;
+            //gtPose.matrix() = gtMatrix.cast<float>();
+            ////cout << gtPose.rotation() << endl;
+            ////cout << gtPose.translation() << endl;
+
+            //Eigen::Matrix<double, 4, 4> predMatrix;
+            //cv::cv2eigen(pred_pose, predMatrix); // cv::Mat 转换成 Eigen::Matrix
+            //Eigen::Affine3f predPose;
+            //predPose.matrix() = predMatrix.cast<float>();
+
+            //Eigen::Matrix3f RtRsInv(gtPose.rotation().inverse().lazyProduct(predPose.rotation()).eval());
+            //Eigen::AngleAxisf rotation_diff_mat(RtRsInv); //tr(Rs.inv * Rt) = tr(Rt * Rs.inv)
+            //double phi = std::abs(rotation_diff_mat.angle());
+            //float dNorm = (gtPose.translation() - predPose.translation()).norm();
+            //phiMap[modelNameInCfg].push_back(phi);
+            //dNormMap[modelNameInCfg].push_back(dNorm);
         }
     }
 
 
     // 保存误差结果
-    writeMap(ADDMap, ADDName);
-    writeMap(ADIMap, ADIName);
-    writeMap(centerErrorMap, centerErrorName);
-    writeMap(phiMap, phiName);
-    writeMap(dNormMap, dNormName);
-    writeMap(timeMap, timeName);
-    writeMap(occulsionMap, occulsionName);
-    writeMap(Diamters, DiamtersName);
+    //writeMap(ADDMap, ADDName);
+    //writeMap(ADIMap, ADIName);
+    //writeMap(centerErrorMap, centerErrorName);
+    //writeMap(phiMap, phiName);
+    //writeMap(dNormMap, dNormName);
+    //writeMap(timeMap, timeName);
+    //writeMap(occulsionMap, occulsionName);
+    //writeMap(Diamters, DiamtersName);
+    
+    writeMap(checkTableMap, checkTableName);
 
     int instancesNum(0);
-    for (auto it = ADDMap.begin(); it != ADDMap.end(); ++it) {
+    for (auto it = checkTableMap.begin(); it != checkTableMap.end(); ++it) {
         instancesNum += it->second.size();
         cout << it->first << ": " << it->second.size() << endl;
     }
@@ -297,13 +315,18 @@ void evalKinect() {
 
 }
 
-int rateUwa() {
-    cout << "rate UWA" << endl;
-    string dataName = "UWA";
+int rateUwa(string& Method) {
 
-    string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/UWA/";
-    string configPath = "3D models/Mian/";
-    string predPath = "D:/wenhao.sun/Documents/GitHub/1-project/Halcon_benchmark/halconResults/uwa/";
+    string method = Method;
+    cout << "*****************************  " << method << "  *****************************" << endl;
+    string dataName = "UWA";
+    cout << "rate " << dataName << endl;
+
+    string evalFileRootPath = "D:/wenhao.sun/Documents/GitHub/1-project/eval/" + method + "Eval/"+ dataName + "/";
+
+    // 输出failure case的文件名
+    string failureCaseADICenterFilePath = evalFileRootPath + method + "FailureCasesADICenter.txt";
+    string failureCaseADICenterOcclusionFilePath = evalFileRootPath + method + "FailureCasesADICenterOcclusion.txt";
 
     vector<string> uwaModelName{ "parasaurolophus_high", "cheff", "chicken_high", "T-rex_high" };
     //cout << uwaModelName[0] << endl;
@@ -314,6 +337,9 @@ int rateUwa() {
     map< string, vector<double>> dNormMap;
     map< string, vector<double>> timeMap;
     map< string, vector<double>> occulsionMap;
+    map< string, vector<string>> checkTableMap;
+    map< string, vector<string>> failureCaseADICenterTableMap;
+    map< string, vector<double>> failureCaseADICenterOcclusionTableMap;
     map<string, int> tpADD;
     map<string, int> tpADICenter;
     map<string, int> tpManifold;
@@ -323,12 +349,17 @@ int rateUwa() {
     map<string, double> rateADICenter;
     map<string, double> rateManifold;
     map<string, double> Diamters;
+    map<string, int> instanceNumMap;
+    map<string, double> modelTimeMap;
 
     for (int i = 0; i < uwaModelName.size(); i++) {
         //ADDMap[uwaModelName[i]] = vector<double>();
         //phiMap[uwaModelName[i]] = vector<double>();
         //dNormMap[uwaModelName[i]] = vector<double>();
         //timeMap[uwaModelName[i]] = vector<double>();
+        failureCaseADICenterTableMap[uwaModelName[i]] = vector<string>();
+        failureCaseADICenterOcclusionTableMap[uwaModelName[i]] = vector<double>();
+
         tpADD[uwaModelName[i]] = 0;
         tpADICenter[uwaModelName[i]] = 0;
         tpManifold[uwaModelName[i]] = 0;
@@ -337,15 +368,17 @@ int rateUwa() {
         rateADD[uwaModelName[i]] = 0;
         rateADICenter[uwaModelName[i]] = 0;
         rateManifold[uwaModelName[i]] = 0;
+        modelTimeMap[uwaModelName[i]] = 0;
     }
-    string ADDName = "../eval_" + dataName + (string)"/eval_ADD.txt";
-    string ADIName = "../eval_" + dataName + (string)"/eval_ADI.txt";
-    string centerErrorName = "../eval_" + dataName + (string)"/eval_centerError.txt";
-    string phiName = "../eval_" + dataName + (string)"/eval_phi.txt";
-    string dNormName = "../eval_" + dataName + (string)"/eval_dNorm.txt";
-    string timeName = "../eval_" + dataName + (string)"/eval_time.txt";
-    string DiamtersName = "../eval_" + dataName + (string)"/eval_Diamters.txt";
-    string occulsionName = "../eval_" + dataName + (string)"/eval_occulsion.txt";
+    string ADDName          = evalFileRootPath + (string)"/eval_ADD.txt";
+    string ADIName          = evalFileRootPath + (string)"/eval_ADI.txt";
+    string centerErrorName  = evalFileRootPath + (string)"/eval_centerError.txt";
+    string phiName          = evalFileRootPath + (string)"/eval_phi.txt";
+    string dNormName        = evalFileRootPath + (string)"/eval_dNorm.txt";
+    string timeName         = evalFileRootPath + (string)"/eval_time.txt";
+    string DiamtersName     = evalFileRootPath + (string)"/eval_Diamters.txt";
+    string occulsionName    = evalFileRootPath + (string)"/eval_occulsion.txt";
+    string checkTableName   = evalFileRootPath + (string)"/checkTable.txt";
 
     readMap(ADDMap, ADDName);
     readMap(ADIMap, ADIName);
@@ -353,6 +386,7 @@ int rateUwa() {
     readMap(dNormMap, dNormName);
     readMap(timeMap, timeName);
     readMap(occulsionMap, occulsionName);
+    readMap(checkTableMap, checkTableName);
 
     readMap(centerErrorMap, centerErrorName);
     readMap(Diamters, DiamtersName);
@@ -366,6 +400,7 @@ int rateUwa() {
     double AD_scale = 0.1;
     double manifold_pos_scale = 0.1;
 
+
     int allInstNum = 0;
     int allTpMfldNum = 0;
     int allLowOcculNum = 0;
@@ -375,7 +410,24 @@ int rateUwa() {
     for (int modelIndex = 0; modelIndex < uwaModelName.size(); modelIndex++) {
 
         string ModelName = uwaModelName[modelIndex];
-        int instanceNum = ADDMap[ModelName].size();
+        int instanceNumADD = ADDMap[ModelName].size();
+        int instanceNumADI = ADIMap[ModelName].size();
+        int instanceNumPhi = phiMap[ModelName].size();
+
+        if (instanceNumADD != instanceNumADI || instanceNumADD != instanceNumPhi || instanceNumADI != instanceNumPhi)
+        {
+            cout << "Wrong instanceNum" << endl;
+            return -1;
+        }
+
+        int instanceNum = instanceNumADD;
+        instanceNumMap[ModelName] = instanceNum;
+
+        // time
+        for (int insIndex = 0; insIndex < instanceNum; insIndex++) {
+            double time = timeMap[ModelName][insIndex];
+            modelTimeMap[ModelName] += time;
+        }
 
         //rate ADD
         double ADDthres = AD_scale * Diamters[ModelName]; ///thres
@@ -396,6 +448,12 @@ int rateUwa() {
             double centerError = centerErrorMap[ModelName][insIndex];
             if (max(ADIError, centerError) < ADICenterthres) { ///////////////////////////
                 tpADICenter[ModelName] += 1;
+            }
+            else {
+                string failureCase = checkTableMap[ModelName][insIndex];
+                failureCaseADICenterTableMap[ModelName].push_back(failureCase);
+                double failureCaseOcclusion = occulsionMap[ModelName][insIndex];
+                failureCaseADICenterOcclusionTableMap[ModelName].push_back(failureCaseOcclusion);
             }
         }
         rateADICenter[ModelName] = (double)tpADICenter[ModelName] / (double)instanceNum;
@@ -421,7 +479,7 @@ int rateUwa() {
 
         }
         rateManifold[ModelName] = (double)tpManifold[ModelName] / (double)instanceNum;
-        cout << " rateManifold: " << tpManifold[ModelName] << " / " << instanceNum << " = " << rateManifold[ModelName] << "          " << ModelName << endl;
+        //cout << " rateManifold: " << tpManifold[ModelName] << " / " << instanceNum << " = " << rateManifold[ModelName] << "          " << ModelName << endl;
 
         allInstNum += instanceNum;
         allTpMfldNum += tpManifold[ModelName];
@@ -434,9 +492,55 @@ int rateUwa() {
     // recognition rate of all objects; 
     // Manifold
     cout << "manifld" << endl;
-    cout << "recognition rate: " << allTpMfldNum << " / " << allInstNum << " = " << (double)allTpMfldNum / (double)allInstNum << endl;
+    for (int modelIndex = 0; modelIndex < uwaModelName.size(); modelIndex++) {
+        string ModelName = uwaModelName[modelIndex];
+        cout << " rateManifold: " << tpManifold[ModelName] << " / " << instanceNumMap[ModelName] << " = " << rateManifold[ModelName] << "          " << ModelName << endl;
+    }
+    cout << "mfld recognition rate: " << allTpMfldNum << " / " << allInstNum << " = " << (double)allTpMfldNum / (double)allInstNum << endl;
     cout << "recognition rate of all objs with less than 84% occlusion: " << allTpMfldLowOcculNum << " / " << allLowOcculNum << " = " << (double)allTpMfldLowOcculNum / (double)allLowOcculNum << endl;
+    cout << endl;
 
+    // ADD
+    cout << "ADD" << endl;
+    double averageRecallADD = 0;
+    double recallSumADD = 0;
+    for (int modelIndex = 0; modelIndex < uwaModelName.size(); modelIndex++) {
+        string ModelName = uwaModelName[modelIndex];
+        cout << " rateADD: " <<  tpADD[ModelName] << " / " << instanceNumMap[ModelName] << " = " << rateADD[ModelName] << "          " << ModelName << endl;
+        recallSumADD += rateADD[ModelName];
+    }
+    averageRecallADD = recallSumADD / uwaModelName.size();
+    cout << "ADD recognition rate: " << " sum {recall of single obj} / obj num = " << averageRecallADD << endl;
+    cout << endl;
+
+    // ADI & center
+    cout << "ADI & center" << endl;
+    double avergRecallADI = 0;
+    double recallSumADI = 0;
+    for (int modelIndex = 0; modelIndex < uwaModelName.size(); modelIndex++) {
+        string ModelName = uwaModelName[modelIndex];
+        cout  << " rateADICenter: " <<  tpADICenter[ModelName] << " / " << instanceNumMap[ModelName] << " = " << rateADICenter[ModelName] << "          " << ModelName << endl;
+        recallSumADI += rateADICenter[ModelName];
+    }
+    avergRecallADI = recallSumADI / uwaModelName.size();
+    cout << "ADI&Center recognition rate: " << " sum {recall of single obj} / obj num = " << avergRecallADI << endl;
+    cout << endl;
+
+    cout << "Time" << endl;
+    double avgAllInferenceTime = 0;
+    double sumTime = 0;
+    for (int modelIndex = 0; modelIndex < uwaModelName.size(); modelIndex++) {
+        string ModelName = uwaModelName[modelIndex];
+        double avgTime = modelTimeMap[ModelName] / instanceNumMap[ModelName];
+        cout << "rateTime: " << modelTimeMap[ModelName] << " / " << instanceNumMap[ModelName] << " = " << avgTime << "          " << ModelName << endl;
+        sumTime += modelTimeMap[ModelName];
+    }
+    avgAllInferenceTime = sumTime / allInstNum;
+    cout << "Average time of all instances of all objects: " << "sum{inference time of one obj in a scene} / inference counts = " << avgAllInferenceTime << endl;
+    cout << endl;
+
+    writeMap(failureCaseADICenterTableMap, failureCaseADICenterFilePath); 
+    writeMap(failureCaseADICenterOcclusionTableMap, failureCaseADICenterOcclusionFilePath);
 
     return 0;
 }
@@ -453,9 +557,11 @@ int main() {
 #else
     cout << "Running without OpenMP and without TBB" << endl;
 #endif
+    string method = "halcon";
+    //string method = "ppf_2025";
 
-    //evalUwa();
-    rateUwa();
+    //evalUwa(method);
+    rateUwa(method);
 
 
     //writeMap();
@@ -463,7 +569,7 @@ int main() {
 }
 
 int main2() {
-    string path = "D:\\wenhao.sun\\Documents\\GitHub\\1-project\\ppf_2025\\test.txt";
+    string path = "D:/wenhao.sun/Documents/GitHub/1-project/ppf_2025/test.txt";
     ifstream infile;
     infile.open(path);
     vector<int> pose;
@@ -522,60 +628,4 @@ int main1(int argc, char** argv)
 }
 
 
-int writeMap(const map<string, vector<double>>& m, const string& outPath) {
-    //map<string, vector<double>> m = { {"1th", vector<double>{0,1,2}} , {"2th", vector<double>{0,1,2}} };
-    // 存入文件out.txt
-    ofstream of(outPath);
-    for (const auto& i : m) {
-        of << i.first << ' ';
-        for (auto& v : i.second)
-            of << v << ' ';
-        of << std::endl;
-
-    }
-    of.close();
-    return 0;
-}
-
-int writeMap(const map<string, double>& m, const string& outPath) {
-    //map<string, vector<double>> m = { {"1th", vector<double>{0,1,2}} , {"2th", vector<double>{0,1,2}} };
-    // 存入文件out.txt
-    ofstream of(outPath);
-    for (const auto& i : m) {
-        of << i.first << ' ' << i.second << std::endl;
-    }
-    of.close();
-    return 0;
-}
-
-int readMap(map<string, vector<double>>& m2, const string& inPath) {
-    // 读取文件，存入map m2中
-    //map<string, vector<double>> m2;
-    ifstream iff(inPath);
-    if (!iff.is_open()) { cout << "not open: " << inPath << endl; exit(1); }
-    string keyval;
-    while (getline(iff, keyval)) {
-        std::vector<std::string> mStr;
-        boost::split(mStr, keyval, boost::is_any_of(" "));
-        for (int i = 1; i < mStr.size() - 1; i++)
-            m2[mStr[0]].push_back(stod(mStr[i]));
-    }
-    iff.close();
-    return 0;
-}
-
-int readMap(map<string, double>& m2, const string& inPath) {
-    // 读取文件，存入map m2中
-    //map<string, vector<double>> m2;
-    ifstream iff(inPath);
-    if (!iff.is_open()) { cout << "not open: " << inPath << endl; exit(1); }
-    string keyval;
-    while (getline(iff, keyval)) {
-        std::vector<std::string> mStr;
-        boost::split(mStr, keyval, boost::is_any_of(" "));
-        m2[mStr[0]] = stod(mStr[1]);
-    }
-    iff.close();
-    return 0;
-}
 

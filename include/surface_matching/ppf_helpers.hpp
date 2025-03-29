@@ -45,6 +45,14 @@ namespace ppf_match_3d
 //! @addtogroup surface_matching
 //! @{
 
+int writeMap(const map<string, vector<double>>& m, const string& outPath);
+int writeMap(const map<string, vector<string>>& m, const string& outPath);
+int writeMap(const map<string, double>& m, const string& outPath);
+int readMap(map<string, vector<double>>& m2, const string& inPath);
+int readMap(map<string, double>& m2, const string& inPath);
+int readMap(map<string, vector<string>>& m2, const string& inPath);
+
+
 /**
  *  @brief Load a PLY file
  *  @param [in] fileName The PLY model to read

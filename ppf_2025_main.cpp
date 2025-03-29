@@ -78,6 +78,8 @@ int main(int argc, char** argv)
     float keypointStep = stoi((string)argv[4]);
     size_t N = stoi((string)argv[5]);
 
+    double relativeSamplingStep = 0.025;
+    double relativeSceneDistance = 0.025;
 
 
 
@@ -98,7 +100,7 @@ int main(int argc, char** argv)
     // Now train the model
     cout << "Training..." << endl;
     int64 tick1 = cv::getTickCount();
-    ppf_match_3d::PPF3DDetector detector(0.025, 0.025);//0.025, 0.05
+    ppf_match_3d::PPF3DDetector detector(relativeSamplingStep);//0.025, 0.05
     detector.enableDebug(true);
     detector.trainModel(pc); //// pc_vcg
     int64 tick2 = cv::getTickCount();
@@ -109,7 +111,7 @@ int main(int argc, char** argv)
     // Read the scene
     tick1 = cv::getTickCount();
 
-    MyMesh pcS;
+    MyMesh pcS; // uwa dataset
     vcg::tri::io::ImporterPLY<MyMesh>::Open(pcS, sceneFileName.c_str());
     if (pcS.face.size() == 0) {
         cout << "Scene has no face. Need faces for normal computing by PerVertexFromCurrentFaceNormal" << endl;
@@ -142,7 +144,7 @@ int main(int argc, char** argv)
     cout << endl << "Starting matching..." << endl;
     vector<Pose3DPtr> results;
     tick1 = cv::getTickCount();
-    detector.match(pcTest, results, 1.0/ keypointStep, 0.025); //1.0/40.0, 0.05；作者建议1.0/5.0，0.025
+    detector.match(pcTest, results, 1.0/ keypointStep, relativeSceneDistance); //1.0/40.0, 0.05；作者建议1.0/5.0，0.025
     tick2 = cv::getTickCount();
     cout << endl << "PPF Elapsed Time " <<
          (tick2-tick1)/cv::getTickFrequency() << " sec" << endl;
@@ -156,7 +158,7 @@ int main(int argc, char** argv)
     }
 
     // Create an instance of ICP
-    ICP icp(5, 0.005f, 2.5f, 3);
+    ICP icp(5, 0.005f, .05f, 3); //100, 0.005f, 2.5f, 8
 
     int64 t1 = cv::getTickCount();
     int postPoseNum = 100;

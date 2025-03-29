@@ -1,4 +1,0 @@
-T-rex_high 273.748
-cheff 318.163
-chicken_high 222.734
-parasaurolophus_high 363.884
