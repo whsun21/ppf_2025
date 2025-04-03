@@ -270,81 +270,64 @@ int debugUwaFailureCases(string& Method) {
 
 }
 
-int main() {
-#if (defined __x86_64__ || defined _M_X64)
-    cout << "Running on 64 bits" << endl;
-#else
-    cout << "Running on 32 bits" << endl;
-#endif
-
-#ifdef _OPENMP
-    cout << "Running with OpenMP" << endl;
-#else
-    cout << "Running without OpenMP and without TBB" << endl;
-#endif
-    //string method = "halcon";
-    string method = "ppf_2025";
-
-
-    //testUwa();
-    debugUwaFailureCases(method);
-
-}
-
-
-static void help(const string& errorMessage)
-{
-    cout << "Program init error : " << errorMessage << endl;
-    cout << "\nUsage : ppf_matching [input model file] [input scene file]" << endl;
-    cout << "\nPlease start again with new parameters" << endl;
-}
-
-int main1(int argc, char** argv)
+int debug(char** argv)
 {
 
 
-    // welcome message
-    cout << "****************************************************" << endl;
-    cout << "* Surface Matching demonstration : demonstrates the use of surface matching"
-        " using point pair features." << endl;
-    cout << "* The sample loads a model and a scene, where the model lies in a different"
-        " pose than the training.\n* It then trains the model and searches for it in the"
-        " input scene. The detected poses are further refined by ICP\n* and printed to the "
-        " standard output." << endl;
-    cout << "****************************************************" << endl;
+    string dataName = "UWA";
+    string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/" + dataName + "/";
+    string configPath = "3D models/Mian/";
+    string modelPath = rootPath + configPath;
 
-    if (argc < 3)
-    {
-        help("Not enough input arguments");
-        exit(1);
-    }
+    //debug
+    string gtName = (string)argv[6];
+    string debugFolderName = gtName;
+    string sceneKeypointFileName = (string)argv[3] + "/" + debugFolderName + "/debug_sampled_scene_ref.ply";
+    string debugGTPoseModelPath = (string)argv[3] + "/" + debugFolderName + "/debug_GTPoseModel.ply";
+    string gtPath = rootPath + configPath + "/GroundTruth_3Dscenes/" + gtName + ".xf";
+    
+    bool debug = true;
+    string samplingMethod = "cube"; // cube, normal
+    double nmsThreshold = 0.2; // 0.5
+    bool refineEnabled = true;
+    bool nmsEnabled = true;
+    //bool refineEnabled = false;
+    //bool nmsEnabled = false;
 
-#if (defined __x86_64__ || defined _M_X64)
-    cout << "Running on 64 bits" << endl;
-#else
-    cout << "Running on 32 bits" << endl;
-#endif
-
-#ifdef _OPENMP
-    cout << "Running with OpenMP" << endl;
-#else
-    cout << "Running without OpenMP and without TBB" << endl;
-#endif
-
-    string modelFileName = (string)argv[1];
-    string sceneFileName = (string)argv[2];
+    string modelFileName = modelPath + (string)argv[1];
+    string sceneFileName = modelPath + (string)argv[2];
     std::vector<std::string> mStr, mn;
     boost::split(mStr, modelFileName, boost::is_any_of("/"));
     boost::split(mn, *(mStr.end() - 1), boost::is_any_of("."));
     std::vector<std::string> sStr, sn;
     boost::split(sStr, sceneFileName, boost::is_any_of("/"));
     boost::split(sn, *(sStr.end() - 1), boost::is_any_of("."));
-    string resultFileName = (string)argv[3] + "/" + mn[0] + "-" + sn[0] + "-" + "PCTrans"; //resultFileName = "../samples/data/results//chicken_small2-rs1_normals-PCTrans.ply"
+    string resultFileName = (string)argv[3] + "/" + debugFolderName + "/" + mn[0] + "-" + sn[0] + "-" + "PCTrans"; //resultFileName = "../samples/data/results//chicken_small2-rs1_normals-PCTrans.ply"
     float keypointStep = stoi((string)argv[4]);
     size_t N = stoi((string)argv[5]);
 
+    double relativeSamplingStep = 0.025;
+    double relativeSceneDistance = 0.025;
 
+    // read gt pose
+    ifstream gt_ifs(gtPath);
+    if (!gt_ifs.is_open()) { cout << "not open: " << gtPath << endl; exit(1); }
+    Matx44d gt_pose;
+    for (int ii = 0; ii < 4; ii++)
+        for (int jj = 0; jj < 4; jj++)
+        {
+            gt_ifs >> gt_pose(ii, jj);
+        }
+    gt_ifs.close();
 
+    // 截取的ROI区域的keypoint
+    MyMesh pcK;
+    vcg::tri::io::ImporterPLY<MyMesh>::Open(pcK, sceneKeypointFileName.c_str());
+    Mat sceneKeypoint;
+    vcgMesh2cvMat(pcK, sceneKeypoint);
+    //for (int i = 0; i < 6; i++) {
+    //    cout << sceneKeypoint.row(i) << "vcg" << endl;
+    //}
 
     // 手动检查法向量！
     //Mat pc = loadPLYSimple(modelFileName.c_str(), 1);
@@ -363,9 +346,16 @@ int main1(int argc, char** argv)
     // Now train the model
     cout << "Training..." << endl;
     int64 tick1 = cv::getTickCount();
-    ppf_match_3d::PPF3DDetector detector(0.025, 0.025);//0.025, 0.05
-    detector.enableDebug(true);
-    detector.trainModel(pc); //// pc_vcg
+    ppf_match_3d::PPF3DDetector detector(relativeSamplingStep);//0.025, 0.05
+    detector.enableDebug(debug);
+    detector.setSceneKeypointForDebug(sceneKeypoint);
+    detector.setDebugFolderName(debugFolderName);
+    
+    detector.setSamplingMethod(samplingMethod);
+    detector.trainModel(pc); //// 
+
+    detector.setGtPose(gt_pose); // 一定在train之后
+    detector.saveGTPoseModel(debugGTPoseModelPath);
     int64 tick2 = cv::getTickCount();
     cout << endl << "Training complete in "
         << (double)(tick2 - tick1) / cv::getTickFrequency()
@@ -374,7 +364,7 @@ int main1(int argc, char** argv)
     // Read the scene
     tick1 = cv::getTickCount();
 
-    MyMesh pcS;
+    MyMesh pcS; // uwa dataset
     vcg::tri::io::ImporterPLY<MyMesh>::Open(pcS, sceneFileName.c_str());
     if (pcS.face.size() == 0) {
         cout << "Scene has no face. Need faces for normal computing by PerVertexFromCurrentFaceNormal" << endl;
@@ -407,7 +397,9 @@ int main1(int argc, char** argv)
     cout << endl << "Starting matching..." << endl;
     vector<Pose3DPtr> results;
     tick1 = cv::getTickCount();
-    detector.match(pcTest, results, 1.0 / keypointStep, 0.025); //1.0/40.0, 0.05；作者建议1.0/5.0，0.025
+    //debugMatch
+    //detector.debugMatch(pcTest, results, 1.0 / keypointStep, relativeSceneDistance); 
+    detector.match(pcTest, results, 1.0 / keypointStep, relativeSceneDistance); //1.0/40.0, 0.05；作者建议1.0/5.0，0.025
     tick2 = cv::getTickCount();
     cout << endl << "PPF Elapsed Time " <<
         (tick2 - tick1) / cv::getTickFrequency() << " sec" << endl;
@@ -421,18 +413,17 @@ int main1(int argc, char** argv)
     }
 
     // Create an instance of ICP
-    ICP icp(5, 0.005f, 2.5f, 3);
+    ICP icp(5, 0.005f, .05f, 3); //100, 0.005f, 2.5f, 8
 
-    int64 t1 = cv::getTickCount();
     int postPoseNum = 100;
     if (results_size < postPoseNum) postPoseNum = results_size;
     vector<Pose3DPtr> resultsPost(results.begin(), results.begin() + postPoseNum);
 
     cout << endl << "Performing ICP,NMS on " << resultsPost.size() << " poses..." << endl;
+    int64 t1 = cv::getTickCount();
 
     // 后处理
-    bool refineEnabled = true;
-    bool nmsEnabled = true;
+    detector.setNMSThreshold(nmsThreshold);
     detector.postProcessing(resultsPost, icp, refineEnabled, nmsEnabled); /////////
 
     int64 t2 = cv::getTickCount();
@@ -483,3 +474,28 @@ int main1(int argc, char** argv)
     return 0;
 
 }
+
+
+int main(int argc, char** argv) {
+#if (defined __x86_64__ || defined _M_X64)
+    cout << "Running on 64 bits" << endl;
+#else
+    cout << "Running on 32 bits" << endl;
+#endif
+
+#ifdef _OPENMP
+    cout << "Running with OpenMP" << endl;
+#else
+    cout << "Running without OpenMP and without TBB" << endl;
+#endif
+    //string method = "halcon";
+    string method = "ppf_2025";
+
+
+    //testUwa();
+    //debugUwaFailureCases(method);
+    debug(argv);
+
+}
+
+

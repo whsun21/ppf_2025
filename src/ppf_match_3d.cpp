@@ -136,7 +136,9 @@ PPF3DDetector::PPF3DDetector(const double RelativeSamplingStep, const double Rel
   hash_table = NULL;
   hash_nodes = NULL;
 
-  debug = false;
+  enableDebug(false);
+  setSamplingMethod((string)"cube");
+  setNMSThreshold(0.5);
   //setSearchParams();
 }
 
@@ -166,6 +168,40 @@ Mat PPF3DDetector::getSampledModel()
 void PPF3DDetector::enableDebug(bool Debug) {
     debug = Debug;
 }
+
+void PPF3DDetector::setSceneKeypointForDebug(Mat& PC) {
+    debug_sampled_scene_ref = PC;
+}
+
+void PPF3DDetector::setGtPose(Matx44d& Pose) {
+    if (!trained)
+    {
+        throw cv::Exception(cv::Error::StsError, "The model is not trained. Cannot setGtPose without training", __FUNCTION__, __FILE__, __LINE__);
+    }
+
+    gtPose = Pose;
+    gtPoseModel = transformPCPose(sampled_pc, Pose);
+}
+
+void PPF3DDetector::saveGTPoseModel(std::string& path) {
+    if (!trained)
+    {
+        throw cv::Exception(cv::Error::StsError, "The model is not trained. Cannot saveGTPoseModel without training", __FUNCTION__, __FILE__, __LINE__);
+    }
+
+    writePLY(gtPoseModel, path.c_str());
+}
+void PPF3DDetector::setDebugFolderName(std::string& path) {
+    debug_folder_name = path;
+}
+void PPF3DDetector::setSamplingMethod(std::string& Method) {
+    samplingMethod = Method;
+}
+
+void PPF3DDetector::setNMSThreshold(double th) {
+    nmsThreshold = th;
+}
+
 
 
 // compute per point PPF as in paper
@@ -227,20 +263,27 @@ void PPF3DDetector::trainModel(const Mat &PC)
 
   float distanceStep = (float)(diameter * sampling_step_relative);
   //distanceStep /= 2;
+  float distanceStepRefine = (float)(distanceStep / 2);
 
   //Mat sampled0 = samplePCByQuantization(PC, xRange, yRange, zRange, (float)sampling_step_relative,0);
   //writePLY(sampled0, "../samples/data/results/sampled_model0.ply");
+  Mat sampled, sampledRefinement;
+  if (samplingMethod == "cube") {
+      sampled = samplePCByQuantization_cube(PC, xRange, yRange, zRange, distanceStep, 0);
+      sampledRefinement = samplePCByQuantization_cube(PC, xRange, yRange, zRange, distanceStepRefine, 0);
 
-  //Mat sampled = samplePCByQuantization_normal(PC, xRange, yRange, zRange, distanceStep, 15.0 / 180 * 3.1415, 3);
-  
-  Mat sampled = samplePCByQuantization_cube(PC, xRange, yRange, zRange, distanceStep, 0);
+  }
+  else if (samplingMethod == "normal") {
+      sampled = samplePCByQuantization_normal(PC, xRange, yRange, zRange, distanceStep, 15.0 / 180 * M_PI, 3);
+      sampledRefinement = samplePCByQuantization_normal(PC, xRange, yRange, zRange, distanceStepRefine, 15.0 / 180 * M_PI, 3);
+  }
+  else { cout << "Unkown samplingMethod: " << samplingMethod << endl; exit(1); }
 
-  float distanceStepRefine = (float)(distanceStep / 2);
-  Mat sampledRefinement = samplePCByQuantization_cube(PC, xRange, yRange, zRange, distanceStepRefine, 0);
-  
   if (debug) {
-      writePLY(sampled, "../samples/data/results/sampled_model.ply");
-      writePLY(sampledRefinement, "../samples/data/results/sampled_model_refine.ply");
+      string name1 = "../samples/data/results/" + debug_folder_name + "/sampled_model.ply";
+      string name2 = "../samples/data/results/" + debug_folder_name + "/sampled_model_refine.ply";
+      writePLY(sampled, name1.c_str());
+      writePLY(sampledRefinement, name2.c_str());
   }
 
   int size = sampled.rows*sampled.rows;
@@ -248,6 +291,8 @@ void PPF3DDetector::trainModel(const Mat &PC)
   hashtable_int* hashTable = hashtableCreate(size, NULL);
 
   int numPPF = sampled.rows*sampled.rows;
+  // 特征矩阵ppf：[|M|^2, 5], 前4维存ppf特征 F(mr, mi)，
+  // 最后一个存alpha_model，这是将mr、n_mr和原点O、x正向对齐之后，将mi绕x轴旋转到XO+Y平面上，所需的旋转角
   ppf = Mat(numPPF, PPF_LENGTH, CV_32FC1);
 
   // TODO: Maybe I could sample 1/5th of them here. Check the performance later.
@@ -282,6 +327,7 @@ void PPF3DDetector::trainModel(const Mat &PC)
         computePPFFeatures(p1, n1, p2, n2, f);
         KeyType hashValue = hashPPF(f, angle_step_radians, distanceStep);
         double alpha = computeAlpha(p1, n1, p2);
+        // 模型点对(mr, mi)的特征在矩阵ppf中的位置
         uint ppfInd = i*numRefPoints+j;
 
         THash* hashNode = &hash_nodes[i*numRefPoints+j];
@@ -528,7 +574,7 @@ void PPF3DDetector::clusterPoses(std::vector<Pose3DPtr>& poseList, int numPoses,
   finalPoses.clear();
 
   // sort the poses for stability
-  std::sort(poseList.begin(), poseList.end(), pose3DPtrCompare);
+  //std::sort(poseList.begin(), poseList.end(), pose3DPtrCompare);
 
   for (int i=0; i<numPoses; i++)
   {
@@ -846,50 +892,54 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   std::vector<Pose3DPtr> poseList;
   int sceneSamplingStep = scene_sample_step;
 
-  // compute bbox
+  // 计算包围框
   Vec2f xRange, yRange, zRange;
   computeBboxStd(pc, xRange, yRange, zRange);
 
-  // sample the point cloud
+  // 场景点云采样
   /*float dx = xRange[1] - xRange[0];
   float dy = yRange[1] - yRange[0];
   float dz = zRange[1] - zRange[0];
   float diameter = sqrt ( dx * dx + dy * dy + dz * dz );
   float distanceSampleStep = diameter * RelativeSceneDistance;*/
-  
   //Mat sampled = samplePCByQuantization(pc, xRange, yRange, zRange, (float)relativeSceneDistance, 0);
 
   float distanceSampleStep = relativeSceneDistance * model_diameter;
-
-  Mat sampled = samplePCByQuantization_cube(pc, xRange, yRange, zRange, distanceSampleStep, 0);
-
-
-  //Mat sampled = samplePCByQuantization_normal(pc, xRange, yRange, zRange, distanceSampleStep, 15.0 / 180 * M_PI, 3);
-
-   
   float distanceSampleStepRefine = distanceSampleStep / 2;
-  Mat sampledDenseRefinement = samplePCByQuantization_cube(pc, xRange, yRange, zRange, distanceSampleStepRefine, 0);
+  Mat sampled, sampledDenseRefinement;
+  if (samplingMethod == "cube") {
+      sampled = samplePCByQuantization_cube(pc, xRange, yRange, zRange, distanceSampleStep, 0);
+      sampledDenseRefinement = samplePCByQuantization_cube(pc, xRange, yRange, zRange, distanceSampleStepRefine, 0);
+  }
+  else if (samplingMethod == "normal") {
+      sampled = samplePCByQuantization_normal(pc, xRange, yRange, zRange, distanceSampleStep, 15.0 / 180 * M_PI, 3);
+      sampledDenseRefinement = samplePCByQuantization_normal(pc, xRange, yRange, zRange, distanceSampleStepRefine, 15.0 / 180 * M_PI, 3);
+  }
+
   //Mat sampledDenseRefinement= samplePCUniform(pc, 8);
   relative_scene_distance = relativeSceneDistance;
-  
   downsample_scene_dense_refinement = sampledDenseRefinement;
   downsample_scene = sampled;
   downsample_scene_flannIndex = indexPCFlann(downsample_scene);
   downsample_scene_dense_refinement_flannIndex = indexPCFlann(downsample_scene_dense_refinement);
   
-  int refPointNum = (sampled.rows / sceneSamplingStep) + 1;
-
-  Mat sampled_ref = Mat(refPointNum, pc.cols, CV_32F);
+  // 将参考点或者说关键点、采样的场景点云存下来，用来debug
+  Mat sampled_ref0 = Mat((sampled.rows / sceneSamplingStep) + 1, pc.cols, CV_32F);
   int c = 0;
   for (int i = 0; i < sampled.rows ; i += sceneSamplingStep)
   {
-      sampled.row(i).copyTo(sampled_ref.row(c++));
+      sampled.row(i).copyTo(sampled_ref0.row(c));
+      c += 1;
   }
-
+  Mat sampled_ref;
+  sampled_ref0.rowRange(0, c).copyTo(sampled_ref); 
+  int refPointNum = c;
   if (debug) {
       std::cout << "参考点数：" << refPointNum << std::endl;
-      writePLY(sampled, "../samples/data/results/sampled_scene.ply");
-      writePLY(sampled_ref, "../samples/data/results/sampled_scene_ref.ply");
+      string name1 = "../samples/data/results/" + debug_folder_name + "/sampled_scene.ply";
+      string name2 = "../samples/data/results/" + debug_folder_name + "/sampled_scene_ref.ply";
+      writePLY(sampled, name1.c_str());
+      writePLY(sampled_ref, name2.c_str());
   }
 
   // radius tree
@@ -899,30 +949,28 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   //unsigned int max_neighbours = num_ref_points * 2;
   //double model_max_dist = model_diameter * model_diameter;
 
-
-
-  // allocate the accumulator : Moved this to the inside of the loop
-  /*#if !defined (_OPENMP)
-     uint* accumulator = (uint*)calloc(numAngles*n, sizeof(uint));
-  #endif*/
-
-  poseList.reserve(refPointNum +4);
+  // 创建一个列表，用来存预测的位姿，这些位姿被算法认为是Positive的
+  poseList.reserve((sampled.rows / sceneSamplingStep) +4);
 
 #if defined _OPENMP
 #pragma omp parallel for
 #endif
+  // 遍历所有的参考点 sr
   for (int i = 0; i < sampled.rows; i += sceneSamplingStep)
   {
+
     uint refIndMax = 0, alphaIndMax = 0;
     uint maxVotes = 0;
 
+    //给定一个参考点sr
     const Vec3f p1(sampled.ptr<float>(i));
     const Vec3f n1(sampled.ptr<float>(i) + 3);
+    // 计算将sr、n_sr和原点、x正方向对齐所需的变换Rsg, tsg
     Vec3d tsg = Vec3d::all(0);
     Matx33d Rsg = Matx33d::all(0), RInv = Matx33d::all(0);
-
-    uint* accumulator = (uint*)calloc(numAngles*n, sizeof(uint));
     computeTransformRT(p1, n1, Rsg, tsg);
+    // 创建一个累加器，用来存hough voting的votes，矩阵：[30*|M|, 1]或者说[|M|, 30]，其中|M|是模型采样点数
+    uint* accumulator = (uint*)calloc(numAngles * n, sizeof(uint));
 
     //std::vector<float> vecQuery{ p1[0], p1[1], p1[2] };
     //std::vector<int> vecIndex;
@@ -934,10 +982,12 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
     // To do this, simply search the local neighborhood by radius look up
     // and collect the neighbors to compute the relative pose
 
+    // 遍历所有的场景点si
     for (int j = 0; j < sampled.rows; j ++)
     {
       if (i!=j)
       {
+        // 对于一个si，它和sr构成点对
         const Vec3f p2(sampled.ptr<float>(j));
         const Vec3f n2(sampled.ptr<float>(j) + 3);
 
@@ -953,36 +1003,39 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
     //    const Vec3f p2(sampled.ptr<float>(pInd));
     //    const Vec3f n2(sampled.ptr<float>(pInd) + 3);
 
-
-        Vec3d p2t;
-        double alpha_scene;
-
+        // 计算 F(sr, si)，离散化之后计算哈希值
         Vec4d f = Vec4d::all(0);
         computePPFFeatures(p1, n1, p2, n2, f);
         KeyType hashValue = hashPPF(f, angle_step, distanceStep);
+        // 计算 alpha_s
+        Vec3d p2t;
+        double alpha_scene;
         p2t = tsg + Rsg * Vec3d(p2);
-
         alpha_scene=atan2(-p2t[2], p2t[1]);
-
         if ( alpha_scene != alpha_scene)
         {
           continue;
         }
-
         if (sin(alpha_scene)*p2t[2]<0.0)
           alpha_scene=-alpha_scene;
-
         alpha_scene=-alpha_scene;
 
+        // 根据哈希值索引具有相似特征的模型点对(mr, mi)，因为离散化，F(sr, si) 约等于 F(mr, mi)，这有助于抵抗噪声
+        // 得到模型点对集合 A = {(mr, mi), (mr', mi'), ...}
         hashnode_i* node = hashtableGetBucketHashed(hash_table, (hashValue));
-
+        // 遍历模型点对集合 A
         while (node)
         {
+            // 对于匹配到的一个模型点对(mr, mi)
             THash* tData = (THash*) node->data;
+            // mr的下标r, r属于[0, |M|-1]
             int corrI = (int)tData->i;
+            // 模型点对(mr, mi)的特征在矩阵ppf中的位置
+            // 取出(mr, mi)对应的alpha_model
             int ppfInd = (int)tData->ppfInd;
             float* ppfCorrScene = ppf.ptr<float>(ppfInd);
             double alpha_model = (double)ppfCorrScene[PPF_LENGTH - 1];
+            // 将(sr, n_sr), (mr, n_mr)和(O, +x)对齐之后，再把mi绕x轴旋转到si所需的角度alpha，
             double alpha = alpha_model - alpha_scene;
 
             /*  Tolga Birdal's note: Map alpha to the indices:
@@ -990,14 +1043,51 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
                     That's why alpha should be in range [-2pi 2pi]
                     So the quantization would be :
                     numAngles * (alpha+2pi)/(4pi)
-                    */
+                    */                    //printf("%f\n", alpha);
 
-                    //printf("%f\n", alpha);
+            // 将[-2pi, 2pi]分成30个区间，计算alpha在第几个区间
             int alpha_index = (int)(numAngles * (alpha + 2 * M_PI) / (4 * M_PI));
-
+            /* 在累加器矩阵[| M | , 30]的(r, alpha_index)处 + 1，
+            
+            也就是，将(sr, si)和(mr, mi)的这次匹配记录下来，顺便将这两个有向point pair对齐所需的变换角alpha也记录了下来。
+            注意，点对特征 F(mr, mi) 是非对称的，mr是模型中的关键点，这里累加器矩阵只关注关键点mr。
+            或者说，累加器矩阵只记录了场景关键点sr和模型的哪个关键点mr是匹配的，匹配的时候两个全局描述符中有多少邻域点是重合的。
+            
+            有向点拥有法向，有向点的两组匹配关系可以确定一个刚体变换。下面用集合的语言说。
+            
+            使用两点hough投票做误匹配去除。这是在求解一个优化问题，即
+            
+            
+            初步的做法是，由点描述符匹配生成一组domain到codomain的点映射，即点匹配关系。我们要去除其中的错误匹配。
+            我们在domain穷举抽样两点，两点对应domain到codomain的两个匹配关系，拟合一个刚体变换。
+            然后验证这个刚体变换是否能让两点坐标、法向重合，即是否能保持距离和法向。不能，则重新抽样两点。若能，则计算这个刚体变换
+            在离散的刚体变换空间中的网格索引，让这个网格中的数加一。
+            
+            巧妙的做法是，通过匹配domain上的点对特征和codomain上的点对特征，得到两个匹配关系，他们能保持距离、法向、弯曲程度。
+            我们在domain上取一个参考点sr，围绕这个参考点遍历抽样点对，计算点对特征，通过匹配这些点对特征生成点映射。
+            （若参考点sr在domain的物体ROI上，生成的点映射在domain的物体ROI上一定是局部单射。）
+            若参考点sr在domain的物体ROI上，因为点对特征的重复性很好，
+            所以生成的点映射一定包含所有的正确点映射，他们从domain的物体ROI映到domain的物体ROI上。
+            当然也会包含一些多余的错的点映射，因为点对特征区分能力有限。
+            接着对这些遍历抽样的所有点对，根据匹配关系计算刚体变换，然后在离散刚体变换空间做投票。
+            
+            而这种在domain上围绕一个参考点sr遍历抽样点对的做法，使得一组domain到codomain的点映射拥有一个相同的domain参考点sr。
+            若他们满足一个相同的刚体变换，则等价于他们拥有一个相同的codomain参考点mr和旋转角alpha。
+            这种等价让hough投票更容易。因为，刚体变换空间是6维的，而(mr, alpha)所属的空间 M X [-2pi, 2pi]是二维的。
+            如果假设刚体变换空间每一维离散成30个区间，那么一共有30^6=729000000个区间。
+            而 M X [-2pi, 2pi]，M是模型曲面流形，它可以离散成1000*30=30,000个区间，空间大大减少。
+            
+            若在domain的物体ROI上取第二个参考点，再围绕这个参考点抽样点对，那么这些点对是新的，对比两点hough投票的穷举做法，可以发现
+            这不过是向穷举抽样两点靠近一小步罢了。这一次同样也生成了所有正确的点匹配和一些错误匹配，所以这一次只是让正确刚体变换和错误刚体变换的
+            得票数都翻一倍罢了。得票数就是拥有一致的刚体变换的匹配关系的个数。
+            
+            注意，将刚体变换空间离散成网格，再计算一个刚体变换的网格索引，让这个网格中的数加一，这其实是在离散的流形上做聚类，
+            因为流形距离小的两个刚体变换才能放到一个网格中。两个参考点分别hough投票，得到离散刚体变换空间中的两个票数极大值点，
+            如果极大值点相同，就将该网格处的票数值相加。这其实对应了ppf最后对刚体变换做聚类的环节，区别在于，他是在连续的流形上聚类。
+            */
             uint accIndex = corrI * numAngles + alpha_index;
-
             accumulator[accIndex]++;
+            
             node = node->next;
         }
       }
@@ -1079,23 +1169,273 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
 
   int numPosesAdded = poseList.size();
 
-  clusterPoses(poseList, numPosesAdded, results);
-  //clusterPosesNMS(poseList, 0.5, results);
+  std::sort(poseList.begin(), poseList.end(), pose3DPtrCompare); // 将clusterPoses中对poseList的排序放到这里
+  
+  if (debug) debugPose(poseList, "numVotes", "afterHoughVot", true);
 
-  overlapRatio(sampled_pc, downsample_scene, downsample_scene_flannIndex, results, model_diameter* 0.08, 25); //relativeSceneDistance *0.8
+  clusterPoses(poseList, numPosesAdded, results);
+
+  if (debug) debugPose(results, "numVotes", "afterCluster", true);
+
+  overlapRatio(sampled_pc, downsample_scene, downsample_scene_flannIndex, results, model_diameter* 0.008, 25); //0.08 | relativeSceneDistance *0.8, 25
   std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
+
+  if (debug) debugPose(results, "overlap", "afterOverlapRatio", true);
+
+}
+
+void PPF3DDetector::debugMatch(const Mat& pc, std::vector<Pose3DPtr>& results, const double relativeSceneSampleStep, const double relativeSceneDistance)
+{
+    if (!trained)
+    {
+        throw cv::Exception(cv::Error::StsError, "The model is not trained. Cannot match without training", __FUNCTION__, __FILE__, __LINE__);
+    }
+
+    CV_Assert(pc.type() == CV_32F || pc.type() == CV_32FC1);
+    CV_Assert(relativeSceneSampleStep <= 1 && relativeSceneSampleStep > 0);
+
+    scene_sample_step = (int)(1.0 / relativeSceneSampleStep);
+
+    //int numNeighbors = 10;
+    int numAngles = (int)(floor(2 * M_PI / angle_step));
+    float distanceStep = (float)distance_step;
+    uint n = num_ref_points;
+    std::vector<Pose3DPtr> poseList;
+    int sceneSamplingStep = scene_sample_step;
+
+    // compute bbox
+    Vec2f xRange, yRange, zRange;
+    computeBboxStd(pc, xRange, yRange, zRange);
+
+    // sample the point cloud
+    /*float dx = xRange[1] - xRange[0];
+    float dy = yRange[1] - yRange[0];
+    float dz = zRange[1] - zRange[0];
+    float diameter = sqrt ( dx * dx + dy * dy + dz * dz );
+    float distanceSampleStep = diameter * RelativeSceneDistance;*/
+
+    //Mat sampled = samplePCByQuantization(pc, xRange, yRange, zRange, (float)relativeSceneDistance, 0);
+
+    float distanceSampleStep = relativeSceneDistance * model_diameter;
+    float distanceSampleStepRefine = distanceSampleStep / 2;
+
+    Mat sampled, sampledDenseRefinement;
+    if (samplingMethod == "cube") {
+        sampled = samplePCByQuantization_cube(pc, xRange, yRange, zRange, distanceSampleStep, 0);
+        sampledDenseRefinement = samplePCByQuantization_cube(pc, xRange, yRange, zRange, distanceSampleStepRefine, 0);
+    }
+    else if (samplingMethod == "normal") {
+        sampled = samplePCByQuantization_normal(pc, xRange, yRange, zRange, distanceSampleStep, 15.0 / 180 * M_PI, 3);
+        sampledDenseRefinement = samplePCByQuantization_normal(pc, xRange, yRange, zRange, distanceSampleStepRefine, 15.0 / 180 * M_PI, 3);
+
+    }
+
+
+    //Mat sampledDenseRefinement= samplePCUniform(pc, 8);
+    relative_scene_distance = relativeSceneDistance;
+
+    downsample_scene_dense_refinement = sampledDenseRefinement;
+    downsample_scene = sampled;
+    downsample_scene_flannIndex = indexPCFlann(downsample_scene);
+    downsample_scene_dense_refinement_flannIndex = indexPCFlann(downsample_scene_dense_refinement);
+
+    // allocate the accumulator : Moved this to the inside of the loop
+    /*#if !defined (_OPENMP)
+       uint* accumulator = (uint*)calloc(numAngles*n, sizeof(uint));
+    #endif*/
+
+    poseList.reserve((sampled.rows / sceneSamplingStep) + 4);
+
+    #if defined _OPENMP
+    #pragma omp parallel for
+    #endif
+    for (int i = 0; i < debug_sampled_scene_ref.rows; i++)
+    {
+        // 给定一个sr
+        //uint refIndMax = 0, alphaIndMax = 0;
+        //uint maxVotes = 0;
+
+        const Vec3f p1(debug_sampled_scene_ref.ptr<float>(i));
+        const Vec3f n1(debug_sampled_scene_ref.ptr<float>(i) + 3);
+        Vec3d tsg = Vec3d::all(0);
+        Matx33d Rsg = Matx33d::all(0), RInv = Matx33d::all(0);
+
+        uint* accumulator = (uint*)calloc(numAngles * n, sizeof(uint));
+        computeTransformRT(p1, n1, Rsg, tsg);
+
+
+        // Tolga Birdal's notice:
+        // As a later update, we might want to look into a local neighborhood only
+        // To do this, simply search the local neighborhood by radius look up
+        // and collect the neighbors to compute the relative pose
+
+        for (int j = 0; j < sampled.rows; j++)
+        {
+            if (i != j)
+            {
+                const Vec3f p2(sampled.ptr<float>(j));
+                const Vec3f n2(sampled.ptr<float>(j) + 3);
+
+                Vec3d p2t;
+                double alpha_scene;
+
+                Vec4d f = Vec4d::all(0);
+                computePPFFeatures(p1, n1, p2, n2, f);
+                KeyType hashValue = hashPPF(f, angle_step, distanceStep);
+                p2t = tsg + Rsg * Vec3d(p2);
+
+                alpha_scene = atan2(-p2t[2], p2t[1]);
+
+                if (alpha_scene != alpha_scene)
+                {
+                    continue;
+                }
+
+                if (sin(alpha_scene) * p2t[2] < 0.0)
+                    alpha_scene = -alpha_scene;
+
+                alpha_scene = -alpha_scene;
+
+                hashnode_i* node = hashtableGetBucketHashed(hash_table, (hashValue));
+
+                while (node)
+                {
+                    THash* tData = (THash*)node->data;
+                    int corrI = (int)tData->i;
+                    int ppfInd = (int)tData->ppfInd;
+                    float* ppfCorrScene = ppf.ptr<float>(ppfInd);
+                    double alpha_model = (double)ppfCorrScene[PPF_LENGTH - 1];
+                    double alpha = alpha_model - alpha_scene;
+
+                    /*  Tolga Birdal's note: Map alpha to the indices:
+                            atan2 generates results in (-pi pi]
+                            That's why alpha should be in range [-2pi 2pi]
+                            So the quantization would be :
+                            numAngles * (alpha+2pi)/(4pi)
+                            */
+
+                            //printf("%f\n", alpha);
+                    int alpha_index = (int)(numAngles * (alpha + 2 * M_PI) / (4 * M_PI));
+
+                    uint accIndex = corrI * numAngles + alpha_index;
+
+                    accumulator[accIndex]++;
+                    node = node->next;
+                }
+            }
+        }
+
+        // 对于一个给定的sr，查找accumulator中是否有tp pose，得分是多少
+        // 遍历accumulator中每个格子，计算位姿
+        std::vector<Pose3DPtr> srPoseList;
+        srPoseList.reserve(numAngles * n);
+
+        for (uint k = 0; k < n; k++)
+        {
+            for (int j = 0; j < numAngles; j++)
+            {
+                const uint accInd = k * numAngles + j;
+                const uint accVal = accumulator[accInd];
+                if (accVal == 0) continue;
+                uint Votes = accVal;
+                uint refInd = k;
+                uint alphaInd = j;
+
+                // invert Tsg : Luckily rotation is orthogonal: Inverse = Transpose.
+                // We are not required to invert.
+                Vec3d tInv, tmg;
+                Matx33d Rmg;
+                RInv = Rsg.t();
+                tInv = -RInv * tsg;
+
+                Matx44d TsgInv;
+                rtToPose(RInv, tInv, TsgInv);
+
+                // TODO : Compute pose
+                const Vec3f pMax(sampled_pc.ptr<float>(refInd));
+                const Vec3f nMax(sampled_pc.ptr<float>(refInd) + 3);
+
+                computeTransformRT(pMax, nMax, Rmg, tmg);
+
+                Matx44d Tmg;
+                rtToPose(Rmg, tmg, Tmg);
+
+                // convert alpha_index to alpha
+                int alpha_index = alphaInd;
+                double alpha = (alpha_index * (4 * M_PI)) / numAngles - 2 * M_PI;
+
+                // Equation 2:
+                Matx44d Talpha;
+                Matx33d R;
+                Vec3d t = Vec3d::all(0);
+                getUnitXRotation(alpha, R);
+                rtToPose(R, t, Talpha);
+
+                Matx44d rawPose = TsgInv * (Talpha * Tmg);
+
+                Pose3DPtr pose(new Pose3D(alpha, refInd, Votes));
+                pose->updatePose(rawPose);
+
+//#if defined (_OPENMP)
+//#pragma omp critical
+//#endif
+                {
+                    srPoseList.push_back(pose);
+                }
+
+
+            }
+        }
+
+        free(accumulator);
+
+        std::sort(srPoseList.begin(), srPoseList.end(), pose3DPtrCompare);
+
+        if (debug) {
+            string stage = "after_Sr_HoughVot_" + to_string(i);
+            debugPose(srPoseList, "numVotes", stage, true, "HoughVot/");
+        }
+
+        cout << "sr " << i << endl;
+    }
+
+    // TODO : Make the parameters relative if not arguments.
+    //double MinMatchScore = 0.5;
+
+    //int numPosesAdded = poseList.size();
+
+    //std::sort(poseList.begin(), poseList.end(), pose3DPtrCompare); // 将clusterPoses中对poseList的排序放到这里
+
+    //debugPose(poseList, "numVotes", "afterHoughVot");
+
+    //clusterPoses(poseList, numPosesAdded, results);
+    ////clusterPosesNMS(poseList, 0.5, results);
+
+    //debugPose(results, "numVotes", "afterCluster");
+
+    //overlapRatio(sampled_pc, downsample_scene, downsample_scene_flannIndex, results, model_diameter * 0.08, 25); //relativeSceneDistance *0.8
+    //std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
+
+    //debugPose(results, "overlap", "afterOverlapRatio");
+
 }
 
 void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bool refineEnabled, bool nmsEnabled)
 {
     // nms for multi instances
+    // 注意，这里截取了前100个位姿做NMS
     if (nmsEnabled) {
         std::vector<Pose3DPtr> finalPoses;
         //std::sort(poseList.begin(), poseList.end(), pose3DPtrCompare);
 
-        NMS(results, 0.5, finalPoses);
+        NMS(results, nmsThreshold, finalPoses);
         results = finalPoses;
-        if (debug) cout << "NMS results num: " << results.size() << endl;
+        
+
+        if (debug) {
+            debugPose(results, "overlap", "afterNMS");
+            cout << "NMS results num: " << results.size() << endl;
+        }
     }
 
     if (refineEnabled)
@@ -1116,9 +1456,81 @@ void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bo
 
         overlapRatio(sampled_pc_refinement, downsample_scene_dense_refinement, downsample_scene_dense_refinement_flannIndex, results, model_diameter * 0.005, 25);
         std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
+
+        if (debug) {
+            debugPose(results, "overlap", "afterRefinement");
+        }
     }
 
 
+}
+
+/*
+看看到底哪个位姿是准确的，假设已经对Poses做了排序
+scoreType: numVotes or overlap
+*/ 
+void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, char* scoreType, std::string stage, bool save, std::string saveFolder){
+    double th = 0.1 * model_diameter;
+    Mat pct_gt = gtPoseModel;
+    int poseNum = Poses.size();
+    vector<bool> whetherTP(poseNum, false);
+    vector<double> scores(poseNum, 0);
+
+    // 用 TP 对应的位姿，对模型做变换，存下来，看看为啥得票数那么低
+    int tpC = 0;
+
+#if defined _OPENMP
+#pragma omp parallel for
+#endif
+
+    for (int i = 0; i < poseNum; i++) {
+        Pose3DPtr Pose = Poses[i];
+        Mat pct_pred = transformPCPose(sampled_pc, Pose->pose);
+        //score
+        if (scoreType == "numVotes") {
+            scores[i] = Pose->numVotes;
+        }
+        else if (scoreType == "overlap") {
+            scores[i] = Pose->overlap;
+        }
+        else{
+            cout << "wrong scoreType" << endl; exit(1);
+        }
+
+        // TP = 0, 1
+        if (isTPUsingADD(pct_gt, pct_pred, th)) {
+            whetherTP[i] = 1;
+            if (save) {
+                // saveFolder = "HoughVot/"
+                string debugName;
+                string prefix = "../samples/data/results/" + debug_folder_name + "/debug_" + saveFolder + stage + "_" + to_string(i+1);
+                if (scoreType == "numVotes") {
+                    //scores[i] = Pose->numVotes;
+                    debugName = prefix + "_numVotes_";
+                }
+                else {
+                    debugName = prefix + "_overlap_";
+
+                }
+                debugName += to_string(scores[i]) + ".ply";
+                writePLY(pct_pred, debugName.c_str());
+            }
+        }
+    }
+
+    // write vector to txt
+    string whetherTPPath = "../samples/data/results/"+ debug_folder_name + "/debug_whetherTP_" +  stage+".txt";
+    ofstream ofTP(whetherTPPath);
+    for (const auto& i : whetherTP) {
+        ofTP << i << ' ' << endl;
+    }
+    ofTP.close();
+    string scoresPath = "../samples/data/results/" + debug_folder_name + "/debug_scores_" +  stage + ".txt";
+    ofstream ofScr(scoresPath);
+    for (const auto& i : scores) {
+        ofScr << i << ' ' << endl;
+    }
+    ofScr.close();
 }
 
 } // namespace ppf_match_3d

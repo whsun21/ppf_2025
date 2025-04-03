@@ -158,6 +158,24 @@ int readMap(map<string, double>& m2, const string& inPath) {
     return 0;
 }
 
+bool isTPUsingADD(cv::Mat& pct_gt, cv::Mat& pct_pred, double th) {
+    double totalD_ADD = 0;
+    bool tp = 0;
+    for (int ii = 0; ii < pct_gt.rows; ii++)
+    {
+        Vec3f v1(pct_gt.ptr<float>(ii));
+        //const Vec3f n1(pct_gt.ptr<float>(ii) + 3);
+        Vec3f v2(pct_pred.ptr<float>(ii));
+        v1 = v1 - v2;
+        totalD_ADD += cv::norm(v1);
+    }
+    totalD_ADD /= pct_gt.rows;
+    if (totalD_ADD < th)
+        tp = 1;
+    return tp;
+}
+
+
 
 typedef cv::flann::L2<float> Distance_32F;
 typedef cv::flann::GenericIndex< Distance_32F > FlannIndex;

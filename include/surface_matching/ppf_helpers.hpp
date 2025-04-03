@@ -52,6 +52,7 @@ int readMap(map<string, vector<double>>& m2, const string& inPath);
 int readMap(map<string, double>& m2, const string& inPath);
 int readMap(map<string, vector<string>>& m2, const string& inPath);
 
+bool isTPUsingADD(cv::Mat& pct_gt, cv::Mat& pct_pred, double th);
 
 /**
  *  @brief Load a PLY file

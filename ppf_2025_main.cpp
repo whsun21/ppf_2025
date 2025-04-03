@@ -66,8 +66,25 @@ int main(int argc, char** argv)
     cout << "Running without OpenMP and without TBB" << endl;
 #endif
     
-    string modelFileName = (string)argv[1];
-    string sceneFileName = (string)argv[2];
+    string dataName = "UWA";
+    string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/" + dataName + "/";
+    string configPath = "3D models/Mian/";
+    string modelPath = rootPath + configPath;
+    string gtPath = rootPath + configPath + "/GroundTruth_3Dscenes/" + "parasaurolophus-rs7.xf";
+    // read gt pose
+    ifstream gt_ifs(gtPath);
+    if (!gt_ifs.is_open()) { cout << "not open: " << gtPath << endl; exit(1); }
+    Matx44d gt_pose;
+    for (int ii = 0; ii < 4; ii++)
+        for (int jj = 0; jj < 4; jj++)
+        {
+            gt_ifs >> gt_pose(ii, jj);
+        }
+    gt_ifs.close();
+
+
+    string modelFileName = modelPath + (string)argv[1];
+    string sceneFileName = modelPath + (string)argv[2];
     std::vector<std::string> mStr, mn;
     boost::split(mStr, modelFileName, boost::is_any_of("/"));
     boost::split(mn, *(mStr.end()-1), boost::is_any_of("."));
@@ -102,6 +119,7 @@ int main(int argc, char** argv)
     int64 tick1 = cv::getTickCount();
     ppf_match_3d::PPF3DDetector detector(relativeSamplingStep);//0.025, 0.05
     detector.enableDebug(true);
+    detector.setGtPose(gt_pose);
     detector.trainModel(pc); //// pc_vcg
     int64 tick2 = cv::getTickCount();
     cout << endl << "Training complete in "
@@ -170,6 +188,8 @@ int main(int argc, char** argv)
     // ºó´¦Àí
     bool refineEnabled = true;
     bool nmsEnabled = true;
+    //bool refineEnabled = false;
+    //bool nmsEnabled = false;
     detector.postProcessing(resultsPost, icp, refineEnabled, nmsEnabled); /////////
 
     int64 t2 = cv::getTickCount();

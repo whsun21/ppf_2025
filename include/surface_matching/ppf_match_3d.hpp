@@ -102,18 +102,28 @@ public:
     *  @param [in] relativeSceneSampleStep The ratio of scene points to be used for the matching after sampling with relativeSceneDistance. For example, if this value is set to 1.0/5.0, every 5th point from the scene is used for pose estimation. This parameter allows an easy trade-off between speed and accuracy of the matching. Increasing the value leads to less points being used and in turn to a faster but less accurate pose computation. Decreasing the value has the inverse effect.
     *  @param [in] relativeSceneDistance Set the distance threshold relative to the diameter of the model. This parameter is equivalent to relativeSamplingStep in the training stage. This parameter acts like a prior sampling with the relativeSceneSampleStep parameter.
     */
-  CV_WRAP void match(const Mat& scene, CV_OUT std::vector<Pose3DPtr> &results, const double relativeSceneSampleStep=1.0/5.0, const double relativeSceneDistance=0.03);
+  CV_WRAP void match(const Mat& scene, CV_OUT std::vector<Pose3DPtr>& results, const double relativeSceneSampleStep = 1.0 / 5.0, const double relativeSceneDistance = 0.03);
+  CV_WRAP void debugMatch(const Mat& scene, CV_OUT std::vector<Pose3DPtr> &results, const double relativeSceneSampleStep=1.0/5.0, const double relativeSceneDistance=0.03);
 
   void read(const FileNode& fn);
   void write(FileStorage& fs) const;
 
   Mat getSampledModel();
   void enableDebug(bool Debug);
+  void setSceneKeypointForDebug(Mat& PC);
+  void setGtPose(Matx44d& Pose);
+  void saveGTPoseModel(std::string& path);
+  void setDebugFolderName(std::string& path);
+
+  void setSamplingMethod(std::string& Method);
+  void setNMSThreshold(double th);
+  
 
   void  PPF3DDetector::SparseICP(std::vector<Pose3DPtr>& resultsS, Mat& srcPC, Mat& dstPC, const int ICP_nbIterations);
   void PPF3DDetector::overlapRatio(const Mat& srcPC, const Mat& dstPC, void* dstFlann, std::vector<Pose3DPtr>& resultsS, double threshold, double anglethreshold);
   void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bool refineEnabled, bool nmsEnabled);
   void PPF3DDetector::NMS(std::vector<Pose3DPtr>& poseList, double Threshold, std::vector<Pose3DPtr>& finalPoses);
+  void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, char* scoreType, std::string stage, bool save=false, std::string saveFolder="");
 
 protected:
 
@@ -131,15 +141,24 @@ protected:
 
   //
   bool debug;
-  double model_diameter;
+  std::string debug_folder_name;
+  Matx44d gtPose;
+  Mat gtPoseModel;
+  Mat debug_sampled_scene_ref;
+
+  std::string samplingMethod; // preprocess
+
+  double model_diameter;  // model
   Vec3f model_center;
   Mat sampled_pc_refinement;
 
-  double relative_scene_distance;
+  double relative_scene_distance;  // scene
   Mat downsample_scene;
   Mat downsample_scene_dense_refinement;
   void* downsample_scene_flannIndex;
   void* downsample_scene_dense_refinement_flannIndex;
+
+  double nmsThreshold; // postprocess
   //
 
   void clearTrainingModels();

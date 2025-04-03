@@ -1,4 +1,4 @@
-*****************************  Halcon  *****************************
+*****************************  halcon  *****************************
 rate UWA
 manifld
  rateManifold: 37 / 45 = 0.822222          parasaurolophus_high
@@ -22,3 +22,41 @@ ADI & center
  rateADICenter: 43 / 45 = 0.955556          T-rex_high
 ADI&Center recognition rate:  sum {recall of single obj} / obj num = 0.929375
 
+Time
+rateTime: 2.29214 / 45 = 0.0509363          parasaurolophus_high
+rateTime: 2.8738 / 50 = 0.057476          cheff
+rateTime: 3.01515 / 48 = 0.0628156          chicken_high
+rateTime: 2.50568 / 45 = 0.0556819          T-rex_high
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / inference counts = 0.0568445
+
+
+*****************************  ppf_2025  *****************************
+rate UWA
+manifld
+ rateManifold: 41 / 45 = 0.911111          parasaurolophus_high
+ rateManifold: 36 / 50 = 0.72          cheff
+ rateManifold: 37 / 48 = 0.770833          chicken_high
+ rateManifold: 40 / 45 = 0.888889          T-rex_high
+mfld recognition rate: 154 / 188 = 0.819149
+recognition rate of all objs with less than 84% occlusion: 149 / 165 = 0.90303
+
+ADD
+ rateADD: 41 / 45 = 0.911111          parasaurolophus_high
+ rateADD: 49 / 50 = 0.98          cheff
+ rateADD: 42 / 48 = 0.875          chicken_high
+ rateADD: 43 / 45 = 0.955556          T-rex_high
+ADD recognition rate:  sum {recall of single obj} / obj num = 0.930417
+
+ADI & center
+ rateADICenter: 41 / 45 = 0.911111          parasaurolophus_high
+ rateADICenter: 49 / 50 = 0.98          cheff
+ rateADICenter: 42 / 48 = 0.875          chicken_high
+ rateADICenter: 43 / 45 = 0.955556          T-rex_high
+ADI&Center recognition rate:  sum {recall of single obj} / obj num = 0.930417
+
+Time
+rateTime: 22.9241 / 45 = 0.509424          parasaurolophus_high
+rateTime: 86.5137 / 50 = 1.73027          cheff
+rateTime: 128.746 / 48 = 2.68221          chicken_high
+rateTime: 66.3603 / 45 = 1.47467          T-rex_high
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / inference counts = 1.61991
