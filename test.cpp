@@ -39,7 +39,7 @@ int testUwa() {
     double relativeSceneDistance = 0.025;
     int N = 1;
     // Create an instance of ICP
-    ICP icp(5, 0.005f, .05f, 3); //100, 0.005f, 2.5f, 8
+    ICP icp(5, 0.005f, 0, 3); //100, 0.005f, 2.5f, 8
     //path
     string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/" + dataName + "/";
     string configPath = "3D models/Mian/";
@@ -117,7 +117,7 @@ int testUwa() {
         vcg::tri::io::ImporterPLY<MyMesh>::Open(pcS, sceneFileName.c_str());
         if (pcS.face.size() == 0) {
             cout << "Scene has no face. Need faces for normal computing by PerVertexFromCurrentFaceNormal" << endl;
-            return -1;
+            exit(1);
         }
         tri::UpdateNormal<MyMesh>::PerFace(pcS);
         tri::UpdateNormal<MyMesh>::PerVertexFromCurrentFaceNormal(pcS);
@@ -168,6 +168,7 @@ int testUwa() {
             ppf_match_3d::PPF3DDetector detector(relativeSamplingStep);//0.025
             //detector.enableDebug(true);
             detector.setSamplingMethod(samplingMethod);
+            detector.setOrientationDiffThreshold(orientationDiffThreshold);
             detector.trainModel(pc);
 
 
@@ -188,24 +189,20 @@ int testUwa() {
                 exit(0);
             }
 
-            // 后处理
-            int postPoseNum = 100;
-            if (results_size < postPoseNum) postPoseNum = results_size;
-            vector<Pose3DPtr> resultsPost(results.begin(), results.begin() + postPoseNum);
-            
+            // 后处理            
             detector.setNMSThreshold(nmsThreshold);
-            detector.postProcessing(resultsPost, icp, refineEnabled, nmsEnabled); /////////
+            detector.postProcessing(results, icp, refineEnabled, nmsEnabled); /////////
 
             // timer 
             int64 t2 = cv::getTickCount();
 
             // Get only first N results - but adjust to results size if num of results are less than that specified by N
-            if (resultsPost.size() < N) {
+            if (results.size() < N) {
                 cout << endl << "Reducing matching poses to be reported (as specified in code): "
-                    << N << " to the number of matches found: " << resultsPost.size() << endl;
-                N = resultsPost.size();
+                    << N << " to the number of matches found: " << results.size() << endl;
+                N = results.size();
             }
-            vector<Pose3DPtr> resultsSub(resultsPost.begin(), resultsPost.begin() + N);
+            vector<Pose3DPtr> resultsSub(results.begin(), results.begin() + N);
 
             // 保存位姿，目前支持一个
             Matx44d pose = resultsSub[0]->pose;
@@ -388,7 +385,8 @@ int debug(char** argv)
     detector.enableDebug(debug);
     detector.setSceneKeypointForDebug(sceneKeypoint);
     detector.setDebugFolderName(debugFolderName);
-    
+
+    detector.setOrientationDiffThreshold(orientationDiffThreshold);
     detector.setSamplingMethod(samplingMethod);
     detector.trainModel(pc); //// 
 
@@ -438,7 +436,6 @@ int debug(char** argv)
     //debugMatch
     //detector.debugMatch(pcTest, results, 1.0 / keypointStep, relativeSceneDistance); 
 
-    detector.setOrientationDiffThreshold(orientationDiffThreshold);
     detector.setSDF(sdf);
     detector.match(pcTest, results, 1.0 / keypointStep, relativeSceneDistance); //1.0/40.0, 0.05；作者建议1.0/5.0，0.025
     
@@ -455,28 +452,25 @@ int debug(char** argv)
         exit(0);
     }
 
-    int postPoseNum = 100;
-    if (results_size < postPoseNum) postPoseNum = results_size;
-    vector<Pose3DPtr> resultsPost(results.begin(), results.begin() + postPoseNum);
 
-    cout << endl << "Performing ICP,NMS on " << resultsPost.size() << " poses..." << endl;
+    cout << endl << "Performing ICP,NMS on " << results.size() << " poses..." << endl;
     int64 t1 = cv::getTickCount();
 
     // 后处理
     detector.setNMSThreshold(nmsThreshold);
-    detector.postProcessing(resultsPost, icp, refineEnabled, nmsEnabled); /////////
+    detector.postProcessing(results, icp, refineEnabled, nmsEnabled); /////////
 
     int64 t2 = cv::getTickCount();
     cout << endl << "ICP,NMS Elapsed Time " <<
         (t2 - t1) / cv::getTickFrequency() << " sec" << endl;
 
     // Get only first N results - but adjust to results size if num of results are less than that specified by N
-    if (resultsPost.size() < N) {
+    if (results.size() < N) {
         cout << endl << "Reducing matching poses to be reported (as specified in code): "
-            << N << " to the number of matches found: " << resultsPost.size() << endl;
-        N = resultsPost.size();
+            << N << " to the number of matches found: " << results.size() << endl;
+        N = results.size();
     }
-    vector<Pose3DPtr> resultsSub(resultsPost.begin(), resultsPost.begin() + N);
+    vector<Pose3DPtr> resultsSub(results.begin(), results.begin() + N);
 
     //// Create an instance of ICP
     //ICP icp(100, 0.005f, 2.5f, 8);
@@ -532,9 +526,9 @@ int main(int argc, char** argv) {
     string method = "ppf_2025";
 
 
-    //testUwa();
+    testUwa();
     //debugUwaFailureCases(method);
-    debug(argv);
+    //debug(argv);
 
 }
 

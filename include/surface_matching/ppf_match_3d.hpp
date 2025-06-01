@@ -46,6 +46,7 @@ typedef struct THash
 {
   int id;
   int i, ppfInd;
+  //Vec4i fd;
   Vec<int, 5> fd;
 } THash;
 
@@ -128,7 +129,7 @@ public:
   void PPF3DDetector::overlapRatio(const Mat& srcPC, const Mat& dstPC, void* dstFlann, std::vector<Pose3DPtr>& resultsS, double threshold, double anglethreshold);
   void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bool refineEnabled, bool nmsEnabled);
   void PPF3DDetector::NMS(std::vector<Pose3DPtr>& poseList, double Threshold, std::vector<Pose3DPtr>& finalPoses);
-  void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, char* scoreType, std::string stage, bool save = false, std::string saveFolder = "");
+  void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, std::string scoreType, std::string stage, bool save = false, std::string saveFolder = "");
   void PPF3DDetector::freespaceIntersectionCount( std::vector<Pose3DPtr>& resultsS, std::vector<Pose3DPtr>& finalPoses, const int& th);
 
 protected:
@@ -155,6 +156,7 @@ protected:
   std::string samplingMethod; // preprocess
 
   double model_diameter;  // model
+  double model_minimum_length;
   Vec3f model_center;
   Mat sampled_pc_refinement;
 

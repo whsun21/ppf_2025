@@ -338,7 +338,8 @@ int ICP::registerModelToScene(const Mat& srcPC, const Mat& dstPC, double& residu
       {
         int numInliers = 0;
         float threshold = getRejectionThreshold(distances, Distances.rows, m_rejectionScale);
-        Mat acceptInd = Distances< (threshold/100.); // Distances<threshold
+        Mat acceptInd = Distances < (threshold / 10.); // Distances<threshold
+        //Mat acceptInd = Distances< threshold; // Distances<threshold
 
         uchar *accPtr = (uchar*)acceptInd.data;
         for (int l=0; l<acceptInd.rows; l++)

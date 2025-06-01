@@ -124,3 +124,35 @@ rateTime: 71.9268 / 50 = 1.43854          cheff
 rateTime: 100.462 / 48 = 2.09296          chicken_high
 rateTime: 52.4453 / 45 = 1.16545          T-rex_high
 Average time of all instances of all objects: sum{inference time of one obj in a scene} / inference counts = 1.28723
+
+2025/6/1
+*****************************  ppf_2025  *****************************
+rate UWA
+manifld
+ rateManifold: 26 / 45 = 0.577778          parasaurolophus_high
+ rateManifold: 42 / 50 = 0.84          cheff
+ rateManifold: 37 / 48 = 0.770833          chicken_high
+ rateManifold: 26 / 45 = 0.577778          T-rex_high
+mfld recognition rate: 131 / 188 = 0.696809
+recognition rate of all objs with less than 84% occlusion: 114 / 165 = 0.690909
+
+ADD
+ rateADD: 29 / 45 = 0.644444          parasaurolophus_high
+ rateADD: 45 / 50 = 0.9          cheff
+ rateADD: 43 / 48 = 0.895833          chicken_high
+ rateADD: 29 / 45 = 0.644444          T-rex_high
+ADD recognition rate:  sum {recall of single obj} / obj num = 0.771181
+
+ADI & center
+ rateADICenter: 29 / 45 = 0.644444          parasaurolophus_high
+ rateADICenter: 46 / 50 = 0.92          cheff
+ rateADICenter: 43 / 48 = 0.895833          chicken_high
+ rateADICenter: 29 / 45 = 0.644444          T-rex_high
+ADI&Center recognition rate:  sum {recall of single obj} / obj num = 0.776181
+
+Time
+rateTime: 45.9472 / 45 = 1.02105          parasaurolophus_high
+rateTime: 49.2373 / 50 = 0.984746          cheff
+rateTime: 108.069 / 48 = 2.25143          chicken_high
+rateTime: 63.9339 / 45 = 1.42075          T-rex_high
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / inference counts = 1.42121

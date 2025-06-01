@@ -71,17 +71,15 @@ static KeyType hashPPF(const Vec4d& f, const double AngleStep, const double Dist
   return hashKey[0];
 }
 
-static KeyType hashPPF2(const Vec4d& f, const double theta, const double AngleStep, const double DistanceStep, const double OrienDiffAngleStep)
+static KeyType hashPPF2(const Vec4d& f, Vec4i& fd, const double AngleStep, const double DistanceStep, const double OrienDiffAngleStep)
 {
-    Vec<int, 5> key(
-        (int)(f[0] / AngleStep),
-        (int)(f[1] / AngleStep),
-        (int)(f[2] / AngleStep),
-        (int)(f[3] / DistanceStep),
-        (int)(theta/ OrienDiffAngleStep));
+    fd[0] = (int)(f[0] / AngleStep);
+    fd[1] = (int)(f[1] / AngleStep);
+    fd[2] = (int)(f[2] / AngleStep);
+    fd[3] = (int)(f[3] / DistanceStep);
     KeyType hashKey[2] = { 0, 0 };  // hashMurmurx64() fills two values
 
-    murmurHash(key.val, 5 * sizeof(int), 42, &hashKey[0]); // 5 int
+    murmurHash(fd.val, 4 * sizeof(int), 42, &hashKey[0]); // 5 int
     return hashKey[0];
 }
 
@@ -179,7 +177,7 @@ PPF3DDetector::PPF3DDetector(const double RelativeSamplingStep, const double Rel
 
   enableDebug(false);
   setSamplingMethod((string)"cube");
-  setOrientationDiffThreshold(2. / 180. * M_PI);
+  //setOrientationDiffThreshold(2. / 180. * M_PI);  // 不要在这里设置,错误的根源
   setNMSThreshold(0.5);
   //setSearchParams();
 }
@@ -285,7 +283,8 @@ void PPF3DDetector::generateFreeSpaceVolume(float& resulotion) {
         volume.row(k) = all_pts[k];
     }
     cv::eigen2cv(volume, downsample_scene_freespace);
-    //writePLY(downsample_scene_freespace, "fs.ply");
+    //string prefix = "../samples/data/results/" + debug_folder_name;
+    //writePLY(downsample_scene_freespace, (prefix +"/fs.ply").c_str());
 }
 
 // compute per point PPF as in paper
@@ -344,6 +343,7 @@ void PPF3DDetector::trainModel(const Mat &PC)
   modelCenter(1) = (yRange[1] + yRange[0]) / 2;
   modelCenter(2) = (zRange[1] + zRange[0]) / 2;
   model_center = modelCenter;
+  model_minimum_length = std::min({ dx, dy, dz });
 
   float distanceStep = (float)(diameter * sampling_step_relative);
   //distanceStep /= 2;
@@ -412,10 +412,9 @@ void PPF3DDetector::trainModel(const Mat &PC)
         double f5theta = computeTheta(p1, n1, p2, n2);
 
         //KeyType hashValue = hashPPF(f1_4, angle_step_radians, distanceStep);
-        //KeyType hashValue = hashPPF2(f1_4, f5theta, angle_step_radians, distanceStep, orientation_diff_threshold);
         Vec<int, 5> fd;
         KeyType hashValue = hashPPF3(f1_4, f5theta, fd, angle_step_radians, distanceStep, orientation_diff_threshold);
-
+        
         double alpha = computeAlpha(p1, n1, p2);
         // 模型点对(mr, mi)的特征在矩阵ppf中的位置
         uint ppfInd = i*numRefPoints+j;
@@ -1151,7 +1150,7 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
         double f5theta = computeTheta(p1, n1, p2, n2);
 
         //KeyType hashValue = hashPPF(f1_4, angle_step, distanceStep);
-        //KeyType hashValue = hashPPF2(f1_4, f5theta, angle_step, distanceStep, orientation_diff_threshold);
+
         Vec<int, 5> fd;
         KeyType hashValue = hashPPF3(f1_4, f5theta, fd, angle_step, distanceStep, orientation_diff_threshold);
 
@@ -1177,7 +1176,11 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
         {
             // 对于匹配到的一个模型点对(mr, mi)
             THash* tData = (THash*) node->data;
-            if (!(tData->fd == fd)) { node = node->next; continue; }
+
+            if (!(tData->fd == fd)) { 
+                node = node->next; 
+                continue; 
+            }
 
             // mr的下标r, r属于[0, |M|-1]
             int corrI = (int)tData->i;
@@ -1188,13 +1191,17 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
             /**** 比较theta_m, theta_s，若 theta_s - theta_m \in [-10deg, +10deg]，则认为他们匹配 ****/
             //double theta_m = (double)ppfCorrScene[PPF_LENGTH - 2];
             //double delta_theta = f5theta - theta_m;
-            //double angle_m = theta_m / M_PI * 180;
-            //double angle_s = f5theta / M_PI * 180;
-            //double angle_delta = delta_theta / M_PI * 180;
-            //int bin_m = (int)(theta_m / orientation_diff_threshold);
-            //int bin_s = (int)(f5theta / orientation_diff_threshold);
+            //////double angle_m = theta_m / M_PI * 180;
+            //////double angle_s = f5theta / M_PI * 180;
+            //////double angle_delta = delta_theta / M_PI * 180;
+            //////int bin_m = (int)(theta_m / orientation_diff_threshold);
+            //////int bin_s = (int)(f5theta / orientation_diff_threshold);
+            //////if (bin_m != bin_s) {
+            //////    node = node->next;
+            //////    continue;
+            //////}
             //if (delta_theta < -orientation_diff_threshold || delta_theta > orientation_diff_threshold) {
-            //    cout << delta_theta / M_PI * 180 << endl;
+            //    //cout << delta_theta / M_PI * 180 << endl;
             //    node = node->next;
             //    continue;
             //}
@@ -1282,7 +1289,7 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
     }
 
     // visualize accumulator
-    Mat accum = cv::Mat(numAngles * n, 1, CV_8U, accumulator) * (255/maxVotes);
+    Mat accum = cv::Mat(numAngles * n, 1, CV_8U, accumulator) * (255./maxVotes);
     cv::Mat result1 = accum.reshape(0, n);
 
     maxVotes *= 0.9;
@@ -1367,11 +1374,10 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   // TODO : Make the parameters relative if not arguments.
   //double MinMatchScore = 0.5;
 
-  int numPosesAdded = poseList.size();
+  //int numPosesAdded = poseList.size();
 
   std::sort(poseList.begin(), poseList.end(), pose3DPtrCompare); // 将clusterPoses中对poseList的排序放到这里
   if (debug) debugPose(poseList, "numVotes", "afterHoughVot", true);
-
 
   //clusterPoses(poseList, numPosesAdded, results);
   //if (debug) debugPose(results, "numVotes", "afterCluster", true);
@@ -1386,7 +1392,7 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   if (debug) debugPose(results, "numVotes", "afterFreespace", true);
 
 
-  overlapRatio(sampled_pc, downsample_scene, downsample_scene_flannIndex, results, model_diameter* 0.01, 25); //0.08 | relativeSceneDistance *0.8, 25
+  overlapRatio(sampled_pc, downsample_scene, downsample_scene_flannIndex, results, model_diameter * 0.01, 25); //0.08 | relativeSceneDistance *0.8, 25
   std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
   if (debug) debugPose(results, "overlap", "afterOverlapRatio", true);
 
@@ -1397,7 +1403,6 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   //results = filterRes;
   //std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
   //if (debug) debugPose(results, "overlap", "afterFreespace", true);
-
 
 }
 
@@ -1643,9 +1648,14 @@ void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bo
     // 注意，这里截取了前100个位姿做NMS
     if (nmsEnabled) {
         std::vector<Pose3DPtr> finalPoses;
-        //std::sort(poseList.begin(), poseList.end(), pose3DPtrCompare);
+        
+        int postPoseNum = 100;
+        if (results.size() < postPoseNum) postPoseNum = results.size();
+        vector<Pose3DPtr> resultsPost(results.begin(), results.begin() + postPoseNum);
+        NMS(resultsPost, nmsThreshold, finalPoses);
 
-        NMS(results, nmsThreshold, finalPoses);
+        //NMS(results, nmsThreshold, finalPoses);
+
         results = finalPoses;
         
 
@@ -1690,7 +1700,7 @@ void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bo
 看看到底哪个位姿是准确的，假设已经对Poses做了排序
 scoreType: numVotes or overlap
 */ 
-void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, char* scoreType, std::string stage, bool save, std::string saveFolder){
+void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, std::string scoreType, std::string stage, bool save, std::string saveFolder){
     double th = 0.1 * model_diameter;
     Mat pct_gt = gtPoseModel;
     int poseNum = Poses.size();
@@ -1718,7 +1728,7 @@ void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, char* scoreType, st
         //    scores[i] = Pose->freespaceIntersec;
         //}
         else{
-            cout << "wrong scoreType" << endl; exit(1);
+            cout << "wrong scoreType: " << scoreType << endl; exit(1);
         }
 
         // TP = 0, 1
@@ -1734,8 +1744,8 @@ void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, char* scoreType, st
                 writePLY(pct_pred, (debugName + ".ply").c_str());
 
                  //save votes' point cloud
-                if (stage == "afterHoughVot") {
-                //if (0) {
+                //if (stage == "afterHoughVot") {
+                if (0) {
                     Mat votes = Pose->voters;
                     string votesNameSi = debugName + "_si" + ".ply";
                     string votesNameMi = debugName + "_mi" + ".ply";

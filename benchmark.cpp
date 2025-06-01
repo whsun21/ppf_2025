@@ -557,10 +557,10 @@ int main() {
 #else
     cout << "Running without OpenMP and without TBB" << endl;
 #endif
-    string method = "halcon";
-    //string method = "ppf_2025";
+    //string method = "halcon";
+    string method = "ppf_2025";
 
-    //evalUwa(method);
+    evalUwa(method);
     rateUwa(method);
 
 
