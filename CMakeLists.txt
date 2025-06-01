@@ -16,6 +16,7 @@ project(ppf_2025)
 set(CMAKE_CXX_STANDARD 14)
 # add_compile_options(-std=c++11)
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -fopenmp") 
+set( CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake" )
 
 #Pcl
 find_package(PCL REQUIRED)
@@ -30,6 +31,9 @@ if(OPENMP_FOUND)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
 endif()
 find_package(VTK REQUIRED)
+
+find_package(DISCREGRID REQUIRED)
+include_directories(${DISCREGRID_INCLUDE_DIRS})
 
 # set(EXECUTABLE_OUTPUT_PATH ${PROJECT_BINARY_DIR}/bin) # 二进制文件的输出目录
 
@@ -56,7 +60,7 @@ target_link_libraries(t_hash_int ${OpenCV_LIBRARIES})
 
 add_library(ppf_match_3d src/ppf_match_3d.cpp)
 target_link_libraries(ppf_match_3d ${OpenCV_LIBRARIES} pose_3d t_hash_int
-icp  sparse_icp)
+icp  sparse_icp ${DISCREGRID_LIBRARIES})
 
 add_library(sparse_icp src/IcpOptimizer.cpp)
 target_link_libraries(sparse_icp )
@@ -64,21 +68,27 @@ target_link_libraries(sparse_icp )
 
 add_executable (ppf_2025_main ppf_2025_main.cpp)
 # target_link_libraries (ppf_main ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp yaml-cpp.a)
-target_link_libraries (ppf_2025_main PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp sparse_icp 
+target_link_libraries (ppf_2025_main PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp sparse_icp  ${DISCREGRID_LIBRARIES}
 debug yaml-cppd.lib 
 optimized  yaml-cpp.lib )
 
 add_executable (test test.cpp)
 # target_link_libraries (ppf_main ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp yaml-cpp.a)
-target_link_libraries (test PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp  sparse_icp
+target_link_libraries (test PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp  sparse_icp ${DISCREGRID_LIBRARIES}
 debug yaml-cppd.lib 
 optimized  yaml-cpp.lib )
 
 add_executable (benchmark benchmark.cpp)
 # target_link_libraries (ppf_main ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp yaml-cpp.a)
-target_link_libraries (benchmark PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp  sparse_icp
+target_link_libraries (benchmark PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp  sparse_icp ${DISCREGRID_LIBRARIES}
 debug yaml-cppd.lib 
-optimized  yaml-cpp.lib )
+optimized  yaml-cpp.lib ) 
+
+add_executable (debug_with_PCL debug_with_PCL.cpp)
+# target_link_libraries (ppf_main ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp yaml-cpp.a)
+target_link_libraries (debug_with_PCL PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp  sparse_icp ${DISCREGRID_LIBRARIES}
+debug yaml-cppd.lib 
+optimized  yaml-cpp.lib ) 
 
 #add_executable (ppf_normal_computation samples/ppf_normal_computation.cpp)
 #target_link_libraries (ppf_normal_computation PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp )

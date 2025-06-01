@@ -102,6 +102,14 @@ void Pose3D::updateOverlap(double Overlap) {
     this->overlap = Overlap;
 }
 
+void Pose3D::updatefreespaceIntersec(int intersection) {
+    this->freespaceIntersec = - intersection ;
+}
+
+
+void Pose3D::addVoter(Mat& Voter) {
+    this->voters.push_back(Voter);
+}
 
 void Pose3D::updatePoseQuat(Vec4d& Q, Vec3d& NewT)
 {
@@ -172,6 +180,7 @@ Pose3DPtr Pose3D::clone()
   new_pose->t = t;
   new_pose->angle = angle;
   new_pose->overlap = overlap;
+  new_pose->freespaceIntersec = freespaceIntersec;
 
   return new_pose;
 }

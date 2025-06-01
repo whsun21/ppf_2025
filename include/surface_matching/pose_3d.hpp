@@ -98,6 +98,10 @@ public:
   
   CV_WRAP void updateOverlap(double Overlap);
 
+  CV_WRAP void updatefreespaceIntersec(int intersection);
+
+  CV_WRAP void addVoter(Mat& Voter);
+
   /**
    *  \brief Updates the pose with the new one
    */
@@ -133,6 +137,8 @@ public:
 
   //
   double overlap;
+  Mat voters;
+  double freespaceIntersec;
 };
 
 /**

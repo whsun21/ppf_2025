@@ -10,7 +10,10 @@
 #include "opencv2/core/utility.hpp"
 
 #include <boost/algorithm/string.hpp>
+#define NOMINMAX
 #include <Windows.h>
+
+#include <Discregrid/All>
 
 
 using namespace std;
@@ -23,6 +26,12 @@ int testUwa() {
     cout << "test " << method << " on dataset " << dataName << endl;
 
     //para
+    string samplingMethod = "cube"; // cube, normal
+    double orientationDiffThreshold = 2. / 180. * M_PI;
+    double nmsThreshold = 0.2; //0.2 0.5
+    bool refineEnabled = true;
+    bool nmsEnabled = true;
+
     // model
     double relativeSamplingStep = 0.025;
     // match
@@ -47,9 +56,12 @@ int testUwa() {
     // 提前读取模型
     vector<string> uwaModelName{ "parasaurolophus_high", "cheff", "chicken_high", "T-rex_high" };
     map<string, Mat> modelPC;
+    map<string, std::shared_ptr<Discregrid::DiscreteGrid>> modelSDF;
     string modelFilePath;
+    string sdfFilePath;
     for (int i = 0; i < uwaModelName.size(); i++) {
         modelFilePath = modelPath + uwaModelName[i] + "_0.ply";
+        sdfFilePath   = modelPath + uwaModelName[i] + "_0.cdf";
 
         MyMesh pcM;
         vcg::tri::io::ImporterPLY<MyMesh>::Open(pcM, modelFilePath.c_str());
@@ -58,6 +70,14 @@ int testUwa() {
 
         //Mat pc = loadPLYSimple(modelFilePath.c_str(), 1);
         modelPC[uwaModelName[i]] = pc;
+
+        // load sdf
+        std::cout << "Load SDF...";
+        auto sdf = std::shared_ptr<Discregrid::DiscreteGrid>{};
+        sdf = std::shared_ptr<Discregrid::CubicLagrangeDiscreteGrid>(
+            new Discregrid::CubicLagrangeDiscreteGrid(sdfFilePath));
+        std::cout << "DONE" << std::endl;
+        modelSDF[uwaModelName[i]] = sdf;
     }
 
 
@@ -74,6 +94,7 @@ int testUwa() {
     for (int icfg = 0; icfg < cfgNameAll.size(); icfg++) {
         //for (int icfg = 0; icfg < 1; icfg++) {
         auto& cfgName = cfgNameAll[icfg];
+        //string cfgName = "ConfigScene2.ini";
         // 单个场景
         string cfgPath0 = rootPath + configPath + cfgName;//cfgName
         LPCTSTR cfgPath = cfgPath0.c_str();
@@ -112,6 +133,7 @@ int testUwa() {
         string modelKey, modelGTKey;
 
         for (int i = 0; i < modelNum; i++) {
+            //i = 2;
             modelKey = "MODEL_" + to_string(i);
             modelGTKey = modelKey + "_GROUNDTRUTH";
 
@@ -140,10 +162,12 @@ int testUwa() {
 
             // 索引模型
             Mat& pc = modelPC[modelNameInCfg];
+            std::shared_ptr<Discregrid::DiscreteGrid> sdf = modelSDF[modelNameInCfg];
 
             // train the model
             ppf_match_3d::PPF3DDetector detector(relativeSamplingStep);//0.025
             //detector.enableDebug(true);
+            detector.setSamplingMethod(samplingMethod);
             detector.trainModel(pc);
 
 
@@ -153,6 +177,8 @@ int testUwa() {
 
             // Match the model to the scene and get the pose
             vector<Pose3DPtr> results;
+            detector.setOrientationDiffThreshold(orientationDiffThreshold);
+            detector.setSDF(sdf);
             detector.match(pcTest, results, 1.0 / keypointStep, relativeSceneDistance); //1.0/40.0, 0.05；作者建议1.0/5.0，0.025
 
             //check results size from match call above
@@ -166,9 +192,8 @@ int testUwa() {
             int postPoseNum = 100;
             if (results_size < postPoseNum) postPoseNum = results_size;
             vector<Pose3DPtr> resultsPost(results.begin(), results.begin() + postPoseNum);
-
-            bool refineEnabled = true;
-            bool nmsEnabled = true;
+            
+            detector.setNMSThreshold(nmsThreshold);
             detector.postProcessing(resultsPost, icp, refineEnabled, nmsEnabled); /////////
 
             // timer 
@@ -272,7 +297,8 @@ int debugUwaFailureCases(string& Method) {
 
 int debug(char** argv)
 {
-
+    cout << "******************* debug *******************" << endl;
+    cout << argv[1] << " " << argv[2] << endl;
 
     string dataName = "UWA";
     string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/" + dataName + "/";
@@ -285,10 +311,12 @@ int debug(char** argv)
     string sceneKeypointFileName = (string)argv[3] + "/" + debugFolderName + "/debug_sampled_scene_ref.ply";
     string debugGTPoseModelPath = (string)argv[3] + "/" + debugFolderName + "/debug_GTPoseModel.ply";
     string gtPath = rootPath + configPath + "/GroundTruth_3Dscenes/" + gtName + ".xf";
-    
     bool debug = true;
+
+
     string samplingMethod = "cube"; // cube, normal
-    double nmsThreshold = 0.2; // 0.5
+    double orientationDiffThreshold = 2. / 180. * M_PI;
+    double nmsThreshold = 0.2; //0.2 0.5
     bool refineEnabled = true;
     bool nmsEnabled = true;
     //bool refineEnabled = false;
@@ -302,12 +330,16 @@ int debug(char** argv)
     std::vector<std::string> sStr, sn;
     boost::split(sStr, sceneFileName, boost::is_any_of("/"));
     boost::split(sn, *(sStr.end() - 1), boost::is_any_of("."));
-    string resultFileName = (string)argv[3] + "/" + debugFolderName + "/" + mn[0] + "-" + sn[0] + "-" + "PCTrans"; //resultFileName = "../samples/data/results//chicken_small2-rs1_normals-PCTrans.ply"
-    float keypointStep = stoi((string)argv[4]);
-    size_t N = stoi((string)argv[5]);
+    string resultFileName = (string)argv[3] + "/" + debugFolderName + "/" + mn[0] + "-" + sn[0] + "-" + "PCTrans"; //resultFileName = "../samples/data/results//parasaurolophus_high_0-rs7_0-PCTrans0.ply"
+    string sdfFileName = modelPath + mn[0] + ".cdf";
+    float keypointStep = stoi((string)argv[4]);  // 5
+    size_t N = stoi((string)argv[5]);  // 3
 
     double relativeSamplingStep = 0.025;
     double relativeSceneDistance = 0.025;
+
+    // Create an instance of ICP
+    ICP icp(5, 0.005f, 0, 3); //100, 0.005f, 2.5f, 8; (5, 0.005f, .05f, 3);
 
     // read gt pose
     ifstream gt_ifs(gtPath);
@@ -342,6 +374,12 @@ int debug(char** argv)
     //    cout << pc_vcg.row(i) << "vcg" << endl;
     //}
 
+    // load sdf
+    std::cout << "Load SDF...";
+    auto sdf = std::shared_ptr<Discregrid::DiscreteGrid>{};
+    sdf = std::shared_ptr<Discregrid::CubicLagrangeDiscreteGrid>(
+        new Discregrid::CubicLagrangeDiscreteGrid(sdfFileName));
+    std::cout << "DONE" << std::endl;
 
     // Now train the model
     cout << "Training..." << endl;
@@ -399,7 +437,12 @@ int debug(char** argv)
     tick1 = cv::getTickCount();
     //debugMatch
     //detector.debugMatch(pcTest, results, 1.0 / keypointStep, relativeSceneDistance); 
+
+    detector.setOrientationDiffThreshold(orientationDiffThreshold);
+    detector.setSDF(sdf);
     detector.match(pcTest, results, 1.0 / keypointStep, relativeSceneDistance); //1.0/40.0, 0.05；作者建议1.0/5.0，0.025
+    
+    
     tick2 = cv::getTickCount();
     cout << endl << "PPF Elapsed Time " <<
         (tick2 - tick1) / cv::getTickFrequency() << " sec" << endl;
@@ -411,9 +454,6 @@ int debug(char** argv)
         cout << endl << "No matching poses found. Exiting." << endl;
         exit(0);
     }
-
-    // Create an instance of ICP
-    ICP icp(5, 0.005f, .05f, 3); //100, 0.005f, 2.5f, 8
 
     int postPoseNum = 100;
     if (results_size < postPoseNum) postPoseNum = results_size;

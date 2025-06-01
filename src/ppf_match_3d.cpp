@@ -1,6 +1,4 @@
 
-// Author: Tolga Birdal <tbirdal AT gmail.com>
-
 #include "precomp.hpp"
 #include "hash_murmur.hpp"
 #include "Eigen/Dense"
@@ -8,6 +6,7 @@
 #include <opencv2/core/eigen.hpp>
 #include "IcpOptimizer.h"
 //#include "surface_matching/poisson_disk_sampling.hpp"
+
 
 using namespace Eigen;
 using namespace std;
@@ -17,7 +16,7 @@ namespace cv
 namespace ppf_match_3d
 {
 
-static const size_t PPF_LENGTH = 5;
+static const size_t PPF_LENGTH = 6;
 
 // routines for assisting sort
 static bool pose3DPtrCompare(const Pose3DPtr& a, const Pose3DPtr& b)
@@ -30,6 +29,12 @@ static bool pose3DPtrCompareOverlap(const Pose3DPtr& a, const Pose3DPtr& b)
 {
     CV_Assert(!a.empty() && !b.empty()); 
     return (a->overlap > b->overlap);
+}
+
+static bool pose3DPtrCompareIntersecNum(const Pose3DPtr& a, const Pose3DPtr& b)
+{
+    CV_Assert(!a.empty() && !b.empty());
+    return (a->freespaceIntersec> b->freespaceIntersec);
 }
 
 
@@ -107,6 +112,20 @@ static double computeAlpha(const Vec3d& p1, const Vec3d& n1, const Vec3d& p2)
   return (-alpha);
 }
 
+static double computeTheta(const Vec3d& p1, const Vec3d& n1, const Vec3d& p2, const Vec3d& n2)
+{
+    Vec3d dp, o;
+    double theta;
+
+    dp = p2 - p1;
+    TNormalize3(dp);
+    o = n1.cross(dp);
+    TNormalize3(o);
+    theta = TAngle3Normalized(o, n2);
+
+    return theta;
+}
+
 PPF3DDetector::PPF3DDetector()
 {
   sampling_step_relative = 0.05;
@@ -138,6 +157,7 @@ PPF3DDetector::PPF3DDetector(const double RelativeSamplingStep, const double Rel
 
   enableDebug(false);
   setSamplingMethod((string)"cube");
+  setOrientationDiffThreshold(2. / 180. * M_PI);
   setNMSThreshold(0.5);
   //setSearchParams();
 }
@@ -202,7 +222,49 @@ void PPF3DDetector::setNMSThreshold(double th) {
     nmsThreshold = th;
 }
 
+void PPF3DDetector::setOrientationDiffThreshold(double th) {
+    orientation_diff_threshold = th;
+}
+void PPF3DDetector::setSDF(std::shared_ptr < Discregrid::DiscreteGrid>& sdfPtr) {
+    sdf_ptr = sdfPtr;
+}
 
+void PPF3DDetector::generateFreeSpaceVolume(float& resulotion) {
+    // free space volume
+    float step_size = 4 * resulotion;
+    int step_num = 0;
+    Eigen::Vector3f origin(0, 0, 0);
+    Eigen::Vector3f scene_point;
+    Eigen::Vector3f t;
+    Eigen::Vector3f d;
+    Eigen::Vector3f pj;
+    vector<Eigen::Vector3f> all_pts;
+    Eigen::MatrixXf scene_cloud;
+    cv::cv2eigen(downsample_scene, scene_cloud);
+    for (size_t i = 0; i < scene_cloud.rows(); ++i) {
+        scene_point = scene_cloud.row(i).leftCols(3);
+        t= origin- scene_point;
+        step_num = t.norm() / step_size;
+        t.normalize();
+        d = step_size * t;
+        
+        pj = scene_point + 0.5 * resulotion * t; // first layer
+        all_pts.push_back(pj);
+
+        for (size_t j = 1; j < step_num/8; ++j) {
+            pj = scene_point + j * d;
+            all_pts.push_back(pj);
+        }
+    }
+
+    Eigen::Matrix<float, -1, 3, 1> volume;
+    volume.resize(all_pts.size(), 3);
+    for (size_t k = 0; k < all_pts.size(); k++) {
+        volume.row(k) = all_pts[k];
+    }
+    cv::eigen2cv(volume, downsample_scene_freespace);
+    //writePLY(downsample_scene_freespace, "fs.ply");
+}
 
 // compute per point PPF as in paper
 void PPF3DDetector::computePPFFeatures(const Vec3d& p1, const Vec3d& n1,
@@ -327,6 +389,7 @@ void PPF3DDetector::trainModel(const Mat &PC)
         computePPFFeatures(p1, n1, p2, n2, f);
         KeyType hashValue = hashPPF(f, angle_step_radians, distanceStep);
         double alpha = computeAlpha(p1, n1, p2);
+        double theta = computeTheta(p1, n1, p2, n2);
         // 模型点对(mr, mi)的特征在矩阵ppf中的位置
         uint ppfInd = i*numRefPoints+j;
 
@@ -338,7 +401,8 @@ void PPF3DDetector::trainModel(const Mat &PC)
         hashtableInsertHashed_2(hashTable, hashValue, (void*)hashNode); // hashtableInsertHashed_2
 
         Mat(f).reshape(1, 1).convertTo(ppf.row(ppfInd).colRange(0, 4), CV_32F);
-        ppf.ptr<float>(ppfInd)[4] = (float)alpha;
+        ppf.ptr<float>(ppfInd)[4] = (float)theta;
+        ppf.ptr<float>(ppfInd)[5] = (float)alpha;
       }
     }
   }
@@ -459,6 +523,45 @@ void PPF3DDetector::overlapRatio(const Mat& srcPC, const Mat& dstPC, void* dstFl
 
         delete[] distances;
         delete[] indices;
+    }
+}
+
+// free space intersection count
+void PPF3DDetector::freespaceIntersectionCount( std::vector<Pose3DPtr>& resultsS, std::vector<Pose3DPtr>& finalPoses, const int& th)
+{
+    finalPoses.clear();
+    finalPoses.reserve(resultsS.size());
+
+    // sdf, inside is +, outside is -
+
+#ifdef _OPENMP
+#pragma omp parallel for 
+#endif
+    for (int i = 0; i < resultsS.size(); i++) {
+        Eigen::VectorXi verts_sdf_contains = MatrixXi::Zero(downsample_scene_freespace.rows, 1);
+        // transpose freespace
+        Mat freespaceMoved = transformPCPose(downsample_scene_freespace, resultsS[i]->pose.inv());
+        for (int k = 0; k < downsample_scene_freespace.rows; ++k)
+        {
+            float* sample = freespaceMoved.ptr<float>(k);
+            double d = sdf_ptr->interpolate(0, { sample[0], sample[1], sample[2]});
+            if (d == std::numeric_limits<double>::max()) { d = -1.; }
+            if (d > 0) { verts_sdf_contains(k) = 1; }
+        }
+        resultsS[i]->updatefreespaceIntersec(verts_sdf_contains.sum());
+        if (verts_sdf_contains.sum() < th) {
+#if defined (_OPENMP)
+#pragma omp critical
+#endif
+            { finalPoses.push_back(resultsS[i]); }
+            
+        }
+        // 
+        //if (verts_sdf_contains.sum() == 0) {
+        //    cout << i << endl;
+        //    cout << resultsS[i]->pose << endl;
+        //}
+        //cout << verts_sdf_contains.sum() <<endl;
     }
 }
 
@@ -678,6 +781,12 @@ void PPF3DDetector::clusterPoses(std::vector<Pose3DPtr>& poseList, int numPoses,
 
       tAvg *= 1.0 / curSize;
       qAvg *= 1.0 / curSize;
+      // normalize quantonion
+      const double qNorm = cv::norm(qAvg);
+      if (qNorm > EPS)
+      {
+          qAvg *= 1.0 / qNorm;
+      }
 
       curPoses[0]->updatePoseQuat(qAvg, tAvg);
       curPoses[0]->numVotes=curCluster->numVotes;
@@ -922,7 +1031,8 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   downsample_scene = sampled;
   downsample_scene_flannIndex = indexPCFlann(downsample_scene);
   downsample_scene_dense_refinement_flannIndex = indexPCFlann(downsample_scene_dense_refinement);
-  
+  generateFreeSpaceVolume(distanceSampleStep);
+
   // 将参考点或者说关键点、采样的场景点云存下来，用来debug
   Mat sampled_ref0 = Mat((sampled.rows / sceneSamplingStep) + 1, pc.cols, CV_32F);
   int c = 0;
@@ -972,6 +1082,10 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
     // 创建一个累加器，用来存hough voting的votes，矩阵：[30*|M|, 1]或者说[|M|, 30]，其中|M|是模型采样点数
     uint* accumulator = (uint*)calloc(numAngles * n, sizeof(uint));
 
+    // saveVoters
+    vector<Mat> coordAccumulator;
+    if (debug) coordAccumulator.resize(numAngles * n);
+
     //std::vector<float> vecQuery{ p1[0], p1[1], p1[2] };
     //std::vector<int> vecIndex;
     //std::vector<float> vecDist;
@@ -1020,6 +1134,10 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
           alpha_scene=-alpha_scene;
         alpha_scene=-alpha_scene;
 
+        /********/
+        //计算 theta_s
+        double theta_s = computeTheta(p1, n1, p2, n2);
+
         // 根据哈希值索引具有相似特征的模型点对(mr, mi)，因为离散化，F(sr, si) 约等于 F(mr, mi)，这有助于抵抗噪声
         // 得到模型点对集合 A = {(mr, mi), (mr', mi'), ...}
         hashnode_i* node = hashtableGetBucketHashed(hash_table, (hashValue));
@@ -1031,9 +1149,21 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
             // mr的下标r, r属于[0, |M|-1]
             int corrI = (int)tData->i;
             // 模型点对(mr, mi)的特征在矩阵ppf中的位置
-            // 取出(mr, mi)对应的alpha_model
             int ppfInd = (int)tData->ppfInd;
             float* ppfCorrScene = ppf.ptr<float>(ppfInd);
+            
+            /********/
+            // 比较theta_m, theta_s，若 theta_s - theta_m \in [-10deg, +10deg]，则认为他们匹配
+            double theta_m = (double)ppfCorrScene[PPF_LENGTH - 2];
+            //double thres = 2. / 180. * M_PI;
+            double delta_theta = theta_s - theta_m;
+            if (delta_theta < -orientation_diff_threshold || delta_theta > orientation_diff_threshold) {
+                node = node->next;
+                continue;
+            }
+
+
+            // 取出(mr, mi)对应的alpha_model
             double alpha_model = (double)ppfCorrScene[PPF_LENGTH - 1];
             // 将(sr, n_sr), (mr, n_mr)和(O, +x)对齐之后，再把mi绕x轴旋转到si所需的角度alpha，
             double alpha = alpha_model - alpha_scene;
@@ -1087,6 +1217,13 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
             */
             uint accIndex = corrI * numAngles + alpha_index;
             accumulator[accIndex]++;
+
+            // saveVoters
+            if (debug) {
+                Mat corres = (cv::Mat_<int>(1, 3) << j, ppfInd, corrI);
+                coordAccumulator[accIndex].push_back(corres);
+
+            }
             
             node = node->next;
         }
@@ -1106,6 +1243,11 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
                 maxVotes = accVal;
         }
     }
+
+    // visualize accumulator
+    Mat accum = cv::Mat(numAngles * n, 1, CV_8U, accumulator) * (255/maxVotes);
+    cv::Mat result1 = accum.reshape(0, n);
+
     maxVotes *= 0.9;
     for (uint k = 0; k < n; k++)
     {
@@ -1152,6 +1294,27 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
 
             Pose3DPtr pose(new Pose3D(alpha, refIndMax, accVal));  //modelIndex
             pose->updatePose(rawPose);
+
+            // compute coordinates of the voters
+            // i scene  j scene  i model j model
+            if (debug) {
+                Mat voted = coordAccumulator[accInd];
+                Mat modelI = voted.col(2);
+                Mat modelJ = voted.col(1) - modelI * n;
+                Mat sceneJ = voted.col(0);
+                Mat votes = Mat(voted.rows * 2 + 2, 6, CV_32F);
+                sampled.row(i).copyTo(votes.row(0)); // si
+                sampled_pc.row(refIndMax).copyTo(votes.row(1)); //mi
+                int sj, mj;
+                for (int ri = 0; ri < voted.rows; ri++) {
+                    sj = sceneJ.at<int>(ri);
+                    sampled.row(sj).copyTo(votes.row(2 + ri));
+                    mj = modelJ.at<int>(ri);
+                    sampled_pc.row(mj).copyTo(votes.row(2 + voted.rows + ri));
+                }
+                pose->addVoter(votes);
+            }
+
             #if defined (_OPENMP)
             #pragma omp critical
             #endif
@@ -1170,17 +1333,34 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   int numPosesAdded = poseList.size();
 
   std::sort(poseList.begin(), poseList.end(), pose3DPtrCompare); // 将clusterPoses中对poseList的排序放到这里
-  
   if (debug) debugPose(poseList, "numVotes", "afterHoughVot", true);
 
-  clusterPoses(poseList, numPosesAdded, results);
 
-  if (debug) debugPose(results, "numVotes", "afterCluster", true);
+  //clusterPoses(poseList, numPosesAdded, results);
+  //if (debug) debugPose(results, "numVotes", "afterCluster", true);
+  results = poseList;
 
-  overlapRatio(sampled_pc, downsample_scene, downsample_scene_flannIndex, results, model_diameter* 0.008, 25); //0.08 | relativeSceneDistance *0.8, 25
+  std::vector<Pose3DPtr> filterRes;
+  //std::vector<Pose3DPtr> smallRes;
+  //smallRes.assign(results.begin(), results.begin() + 150);
+  freespaceIntersectionCount(results, filterRes, 100); // 100
+  results = filterRes;
+  std::sort(results.begin(), results.end(), pose3DPtrCompare);
+  if (debug) debugPose(results, "numVotes", "afterFreespace", true);
+
+
+  overlapRatio(sampled_pc, downsample_scene, downsample_scene_flannIndex, results, model_diameter* 0.01, 25); //0.08 | relativeSceneDistance *0.8, 25
   std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
-
   if (debug) debugPose(results, "overlap", "afterOverlapRatio", true);
+
+  //std::vector<Pose3DPtr> filterRes;
+  //std::vector<Pose3DPtr> smallRes;
+  //smallRes.assign(results.begin(), results.begin() + 100);
+  //freespaceIntersectionCount(smallRes, filterRes, 100);
+  //results = filterRes;
+  //std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
+  //if (debug) debugPose(results, "overlap", "afterFreespace", true);
+
 
 }
 
@@ -1433,7 +1613,7 @@ void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bo
         
 
         if (debug) {
-            debugPose(results, "overlap", "afterNMS");
+            debugPose(results, "overlap", "afterNMS", true);
             cout << "NMS results num: " << results.size() << endl;
         }
     }
@@ -1443,11 +1623,11 @@ void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bo
         // sparse refine
         //SparseICP(results, sampled_pc_refinement, downsample_scene, 5);
 
-        icp.registerModelToScene(sampled_pc_refinement, downsample_scene, results);
+        //icp.registerModelToScene(sampled_pc_refinement, downsample_scene, results);
 
 
-        overlapRatio(sampled_pc_refinement, downsample_scene, downsample_scene_flannIndex, results, model_diameter * 0.08, 25);//relative_scene_distance * 0.8
-        std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
+        //overlapRatio(sampled_pc_refinement, downsample_scene, downsample_scene_flannIndex, results, model_diameter * 0.08, 25);//relative_scene_distance * 0.8
+        //std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
 
         // dense refine
         //SparseICP(results, sampled_pc_refinement, downsample_scene_dense_refinement, 5);
@@ -1456,10 +1636,14 @@ void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bo
 
         overlapRatio(sampled_pc_refinement, downsample_scene_dense_refinement, downsample_scene_dense_refinement_flannIndex, results, model_diameter * 0.005, 25);
         std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
+        if (debug) debugPose(results, "overlap", "afterRefinement", true);
 
-        if (debug) {
-            debugPose(results, "overlap", "afterRefinement");
-        }
+        //std::vector<Pose3DPtr> filterRes;
+        //freespaceIntersectionCount(results, filterRes, 30);
+        //results = filterRes;
+        //std::sort(results.begin(), results.end(), pose3DPtrCompare);
+        //if (debug) debugPose(results, "overlap", "afterRF", true); // Refine Freespace
+
     }
 
 
@@ -1493,6 +1677,9 @@ void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, char* scoreType, st
         else if (scoreType == "overlap") {
             scores[i] = Pose->overlap;
         }
+        //else if (scoreType == "freespace") {
+        //    scores[i] = Pose->freespaceIntersec;
+        //}
         else{
             cout << "wrong scoreType" << endl; exit(1);
         }
@@ -1500,20 +1687,31 @@ void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, char* scoreType, st
         // TP = 0, 1
         if (isTPUsingADD(pct_gt, pct_pred, th)) {
             whetherTP[i] = 1;
+        }
+        // 对于是TP的pose，以及排名前三的pose，将model根据他们做转换，保存下来
+        if (whetherTP[i] == 1 || i < 3){
             if (save) {
                 // saveFolder = "HoughVot/"
-                string debugName;
                 string prefix = "../samples/data/results/" + debug_folder_name + "/debug_" + saveFolder + stage + "_" + to_string(i+1);
-                if (scoreType == "numVotes") {
-                    //scores[i] = Pose->numVotes;
-                    debugName = prefix + "_numVotes_";
-                }
-                else {
-                    debugName = prefix + "_overlap_";
+                string debugName = prefix + "_" + scoreType + "_" + to_string(scores[i]);
+                writePLY(pct_pred, (debugName + ".ply").c_str());
 
+                 //save votes' point cloud
+                //if (stage == "afterHoughVot") {
+                if (0) {
+                    Mat votes = Pose->voters;
+                    string votesNameSi = debugName + "_si" + ".ply";
+                    string votesNameMi = debugName + "_mi" + ".ply";
+                    string votesNameSj = debugName + "_sj" + ".ply";
+                    string votesNameMj = debugName + "_mj" + ".ply";
+                    Mat pct_pred_mi = transformPCPose(votes.row(1), Pose->pose);
+                    Mat pct_pred_mj = transformPCPose(votes.rowRange( 2+(votes.rows-2)/2, votes.rows), Pose->pose);
+                    
+                    writePLY(votes.row(0), votesNameSi.c_str());
+                    writePLY(pct_pred_mi, votesNameMi.c_str());
+                    writePLY(votes.rowRange(2, 2+(votes.rows-2)/2), votesNameSj.c_str());
+                    writePLY(pct_pred_mj, votesNameMj.c_str());
                 }
-                debugName += to_string(scores[i]) + ".ply";
-                writePLY(pct_pred, debugName.c_str());
             }
         }
     }
@@ -1532,6 +1730,7 @@ void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, char* scoreType, st
     }
     ofScr.close();
 }
+
 
 } // namespace ppf_match_3d
 

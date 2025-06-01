@@ -28,6 +28,8 @@ IEEE Computer Society Conference on Computer Vision and Pattern Recognition (CVP
 #include "pose_3d.hpp"
 #include "t_hash_int.hpp"
 #include "surface_matching/icp.hpp"
+#include <Discregrid/All>
+#include <Eigen/Dense>
 
 namespace cv
 {
@@ -117,13 +119,16 @@ public:
 
   void setSamplingMethod(std::string& Method);
   void setNMSThreshold(double th);
-  
+  void setOrientationDiffThreshold(double th);
+  void setSDF(std::shared_ptr < Discregrid::DiscreteGrid>& sdfPtr);
+  void generateFreeSpaceVolume(float& resulotion);
 
   void  PPF3DDetector::SparseICP(std::vector<Pose3DPtr>& resultsS, Mat& srcPC, Mat& dstPC, const int ICP_nbIterations);
   void PPF3DDetector::overlapRatio(const Mat& srcPC, const Mat& dstPC, void* dstFlann, std::vector<Pose3DPtr>& resultsS, double threshold, double anglethreshold);
   void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bool refineEnabled, bool nmsEnabled);
   void PPF3DDetector::NMS(std::vector<Pose3DPtr>& poseList, double Threshold, std::vector<Pose3DPtr>& finalPoses);
-  void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, char* scoreType, std::string stage, bool save=false, std::string saveFolder="");
+  void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, char* scoreType, std::string stage, bool save = false, std::string saveFolder = "");
+  void PPF3DDetector::freespaceIntersectionCount( std::vector<Pose3DPtr>& resultsS, std::vector<Pose3DPtr>& finalPoses, const int& th);
 
 protected:
 
@@ -154,9 +159,12 @@ protected:
 
   double relative_scene_distance;  // scene
   Mat downsample_scene;
+  Mat downsample_scene_freespace;
   Mat downsample_scene_dense_refinement;
   void* downsample_scene_flannIndex;
   void* downsample_scene_dense_refinement_flannIndex;
+  double orientation_diff_threshold;
+  std::shared_ptr < Discregrid::DiscreteGrid> sdf_ptr;
 
   double nmsThreshold; // postprocess
   //

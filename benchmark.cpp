@@ -199,100 +199,100 @@ int evalUwa(string & Method) {
             string str = gtName + "_" + sceneName; ////////////////////////
             checkTableMap[modelNameInPred].push_back(str);
 
-            //// read occulsion
-            //LPSTR  occlu = new char[1024];
-            //GetPrivateProfileString("MODELS", modelOccluKey.c_str(), "NULL", occlu, 512, cfgPath);
-            //string occlus = occlu;
-            //double occlud = stod(occlus);
-            //occulsionMap[modelNameInPred].push_back(occlud);
+            // read occulsion
+            LPSTR  occlu = new char[1024];
+            GetPrivateProfileString("MODELS", modelOccluKey.c_str(), "NULL", occlu, 512, cfgPath);
+            string occlus = occlu;
+            double occlud = stod(occlus);
+            occulsionMap[modelNameInPred].push_back(occlud);
 
-            //// ADD
-            //Mat& pc = modelPC[modelNameInPred];
-            //Mat pct_gt = transformPCPose(pc, gt_pose); //pc是原始模型
-            //Mat pct_pred = transformPCPose(pc, pred_pose); //pc是原始模型
+            // ADD
+            Mat& pc = modelPC[modelNameInPred];
+            Mat pct_gt = transformPCPose(pc, gt_pose); //pc是原始模型
+            Mat pct_pred = transformPCPose(pc, pred_pose); //pc是原始模型
 
-            //double totalD_ADD = 0;
-            //for (int ii = 0; ii < pct_gt.rows; ii++)
-            //{
-            //    Vec3f v1(pct_gt.ptr<float>(ii));
-            //    //const Vec3f n1(pct_gt.ptr<float>(ii) + 3);
-            //    Vec3f v2(pct_pred.ptr<float>(ii));
-            //    v1 = v1 - v2;
-            //    totalD_ADD += cv::norm(v1);
-            //}
-            //totalD_ADD /= pct_gt.rows;
-            //ADDMap[modelNameInCfg].push_back(totalD_ADD);
+            double totalD_ADD = 0;
+            for (int ii = 0; ii < pct_gt.rows; ii++)
+            {
+                Vec3f v1(pct_gt.ptr<float>(ii));
+                //const Vec3f n1(pct_gt.ptr<float>(ii) + 3);
+                Vec3f v2(pct_pred.ptr<float>(ii));
+                v1 = v1 - v2;
+                totalD_ADD += cv::norm(v1);
+            }
+            totalD_ADD /= pct_gt.rows;
+            ADDMap[modelNameInCfg].push_back(totalD_ADD);
 
-            //// ADI
-            //Mat features;
-            //Mat queries;
-            //pct_gt.colRange(0, 3).copyTo(features);
-            //pct_pred.colRange(0, 3).copyTo(queries);
+            // ADI
+            Mat features;
+            Mat queries;
+            pct_gt.colRange(0, 3).copyTo(features);
+            pct_pred.colRange(0, 3).copyTo(queries);
 
-            ////cout << pc.at<float>(0, 0) << pc.at<float>(0, 1) << pc.at<float>(0, 2) << endl;
+            //cout << pc.at<float>(0, 0) << pc.at<float>(0, 1) << pc.at<float>(0, 2) << endl;
 
-            //KDTree* model_tree = BuildKDTree(features);
-            //std::vector<std::vector<int>> indices;
-            //std::vector<std::vector<float>> dists;
-            //SearchKDTree(model_tree, queries, indices, dists, 1);
-            //delete model_tree;
-            //double totalD_ADI = 0;
-            //for (int ii = 0; ii < queries.rows; ii++)
-            //{
-            //    totalD_ADI += sqrt(dists[ii][0]);
-            //}
-            //totalD_ADI /= queries.rows;
-            //ADIMap[modelNameInCfg].push_back(totalD_ADI);
+            KDTree* model_tree = BuildKDTree(features);
+            std::vector<std::vector<int>> indices;
+            std::vector<std::vector<float>> dists;
+            SearchKDTree(model_tree, queries, indices, dists, 1);
+            delete model_tree;
+            double totalD_ADI = 0;
+            for (int ii = 0; ii < queries.rows; ii++)
+            {
+                totalD_ADI += sqrt(dists[ii][0]);
+            }
+            totalD_ADI /= queries.rows;
+            ADIMap[modelNameInCfg].push_back(totalD_ADI);
 
-            ////centerError
-            //Vec3f centerV = Centers[modelNameInCfg];
-            //Mat center = Mat(1, centerV.rows, CV_32F);
-            //float* pcData = center.ptr<float>(0);
-            //pcData[0] = (float)centerV[0];
-            //pcData[1] = (float)centerV[1];
-            //pcData[2] = (float)centerV[2];
+            //centerError
+            Vec3f centerV = Centers[modelNameInCfg];
+            Mat center = Mat(1, centerV.rows, CV_32F);
+            float* pcData = center.ptr<float>(0);
+            pcData[0] = (float)centerV[0];
+            pcData[1] = (float)centerV[1];
+            pcData[2] = (float)centerV[2];
 
-            ////cout << center.row(0) << endl;
-            //Mat ctt_gt = transformPCPose(center, gt_pose); //pc是原始模型
-            //Mat ctt_pred = transformPCPose(center, pred_pose); //pc是原始模型
-            //Vec3f cd = ctt_gt.at<Vec3f>(0) - ctt_pred.at<Vec3f>(0);
-            ////cout << ctt_gt.at<Vec3f>(0) << endl;
-            ////cout << ctt_pred.at<Vec3f>(0) << endl;
-            ////cout << cd << endl;
-            //centerErrorMap[modelNameInCfg].push_back(cv::norm(cd));
+            //cout << center.row(0) << endl;
+            Mat ctt_gt = transformPCPose(center, gt_pose); //pc是原始模型
+            Mat ctt_pred = transformPCPose(center, pred_pose); //pc是原始模型
+            Vec3f cd = ctt_gt.at<Vec3f>(0) - ctt_pred.at<Vec3f>(0);
+            //cout << ctt_gt.at<Vec3f>(0) << endl;
+            //cout << ctt_pred.at<Vec3f>(0) << endl;
+            //cout << cd << endl;
+            centerErrorMap[modelNameInCfg].push_back(cv::norm(cd));
 
-            //// manifold 
-            //Eigen::Matrix<double, 4, 4> gtMatrix;
-            //cv::cv2eigen(gt_pose, gtMatrix); // cv::Mat 转换成 Eigen::Matrix
-            //Eigen::Affine3f gtPose;
-            //gtPose.matrix() = gtMatrix.cast<float>();
-            ////cout << gtPose.rotation() << endl;
-            ////cout << gtPose.translation() << endl;
+            // manifold 
+            Eigen::Matrix<double, 4, 4> gtMatrix;
+            cv::cv2eigen(gt_pose, gtMatrix); // cv::Mat 转换成 Eigen::Matrix
+            Eigen::Affine3f gtPose;
+            gtPose.matrix() = gtMatrix.cast<float>();
+            //cout << gtPose.rotation() << endl;
+            //cout << gtPose.translation() << endl;
 
-            //Eigen::Matrix<double, 4, 4> predMatrix;
-            //cv::cv2eigen(pred_pose, predMatrix); // cv::Mat 转换成 Eigen::Matrix
-            //Eigen::Affine3f predPose;
-            //predPose.matrix() = predMatrix.cast<float>();
+            Eigen::Matrix<double, 4, 4> predMatrix;
+            cv::cv2eigen(pred_pose, predMatrix); // cv::Mat 转换成 Eigen::Matrix
+            Eigen::Affine3f predPose;
+            predPose.matrix() = predMatrix.cast<float>();
 
-            //Eigen::Matrix3f RtRsInv(gtPose.rotation().inverse().lazyProduct(predPose.rotation()).eval());
-            //Eigen::AngleAxisf rotation_diff_mat(RtRsInv); //tr(Rs.inv * Rt) = tr(Rt * Rs.inv)
-            //double phi = std::abs(rotation_diff_mat.angle());
-            //float dNorm = (gtPose.translation() - predPose.translation()).norm();
-            //phiMap[modelNameInCfg].push_back(phi);
-            //dNormMap[modelNameInCfg].push_back(dNorm);
+            Eigen::Matrix3f RtRsInv(gtPose.rotation().inverse().lazyProduct(predPose.rotation()).eval());
+            Eigen::AngleAxisf rotation_diff_mat(RtRsInv); //tr(Rs.inv * Rt) = tr(Rt * Rs.inv)
+            double phi = std::abs(rotation_diff_mat.angle());
+            float dNorm = (gtPose.translation() - predPose.translation()).norm();
+            phiMap[modelNameInCfg].push_back(phi);
+            dNormMap[modelNameInCfg].push_back(dNorm);
         }
     }
 
 
     // 保存误差结果
-    //writeMap(ADDMap, ADDName);
-    //writeMap(ADIMap, ADIName);
-    //writeMap(centerErrorMap, centerErrorName);
-    //writeMap(phiMap, phiName);
-    //writeMap(dNormMap, dNormName);
-    //writeMap(timeMap, timeName);
-    //writeMap(occulsionMap, occulsionName);
-    //writeMap(Diamters, DiamtersName);
+    writeMap(ADDMap, ADDName);
+    writeMap(ADIMap, ADIName);
+    writeMap(centerErrorMap, centerErrorName);
+    writeMap(phiMap, phiName);
+    writeMap(dNormMap, dNormName);
+    writeMap(timeMap, timeName);
+    writeMap(occulsionMap, occulsionName);
+    writeMap(Diamters, DiamtersName);
     
     writeMap(checkTableMap, checkTableName);
 
