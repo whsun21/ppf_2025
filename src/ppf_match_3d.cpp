@@ -71,17 +71,39 @@ static KeyType hashPPF(const Vec4d& f, const double AngleStep, const double Dist
   return hashKey[0];
 }
 
-static std::pair<KeyType, Vec4i> hashPPF2(const Vec4d& f, const double AngleStep, const double DistanceStep)
+static KeyType hashPPF2(const Vec4d& f, const double theta, const double AngleStep, const double DistanceStep, const double OrienDiffAngleStep)
 {
-    Vec4i key(
+    Vec<int, 5> key(
         (int)(f[0] / AngleStep),
         (int)(f[1] / AngleStep),
         (int)(f[2] / AngleStep),
-        (int)(f[3] / DistanceStep));
+        (int)(f[3] / DistanceStep),
+        (int)(theta/ OrienDiffAngleStep));
     KeyType hashKey[2] = { 0, 0 };  // hashMurmurx64() fills two values
 
-    murmurHash(key.val, 4 * sizeof(int), 42, &hashKey[0]);
-    return std::make_pair(hashKey[0], key);
+    murmurHash(key.val, 5 * sizeof(int), 42, &hashKey[0]); // 5 int
+    return hashKey[0];
+}
+
+static KeyType hashPPF3(const Vec4d& f, const double theta, Vec<int, 5>& fd, const double AngleStep, const double DistanceStep, const double OrienDiffAngleStep)
+{
+    fd[0] = (int)(f[0] / AngleStep);
+    fd[1] = (int)(f[1] / AngleStep);
+    fd[2] = (int)(f[2] / AngleStep);
+    fd[3] = (int)(f[3] / DistanceStep);
+    fd[4] = (int)(theta / OrienDiffAngleStep);
+
+    KeyType hashKey[2] = { 0, 0 };  // hashMurmurx64() fills two values
+
+    murmurHash(fd.val, 5 * sizeof(int), 42, &hashKey[0]); // 5 int
+    return hashKey[0];
+    //const std::size_t h1 = std::hash<int>{}(fd[0]); // pcl 
+    //const std::size_t h2 = std::hash<int>{}(fd[1]);
+    //const std::size_t h3 = std::hash<int>{}(fd[2]);
+    //const std::size_t h4 = std::hash<int>{}(fd[3]);
+    //const std::size_t h5 = std::hash<int>{}(fd[4]);
+    //return h1 ^ (h2 << 1) ^ (h3 << 2) ^ (h4 << 3) ^ (h5 << 4);
+
 }
 
 /*static size_t hashMurmur(uint key)
@@ -385,23 +407,28 @@ void PPF3DDetector::trainModel(const Mat &PC)
         const Vec3f p2(sampled.ptr<float>(j));
         const Vec3f n2(sampled.ptr<float>(j) + 3);
 
-        Vec4d f = Vec4d::all(0);
-        computePPFFeatures(p1, n1, p2, n2, f);
-        KeyType hashValue = hashPPF(f, angle_step_radians, distanceStep);
+        Vec4d f1_4 = Vec4d::all(0);
+        computePPFFeatures(p1, n1, p2, n2, f1_4);
+        double f5theta = computeTheta(p1, n1, p2, n2);
+
+        //KeyType hashValue = hashPPF(f1_4, angle_step_radians, distanceStep);
+        //KeyType hashValue = hashPPF2(f1_4, f5theta, angle_step_radians, distanceStep, orientation_diff_threshold);
+        Vec<int, 5> fd;
+        KeyType hashValue = hashPPF3(f1_4, f5theta, fd, angle_step_radians, distanceStep, orientation_diff_threshold);
+
         double alpha = computeAlpha(p1, n1, p2);
-        double theta = computeTheta(p1, n1, p2, n2);
         // 模型点对(mr, mi)的特征在矩阵ppf中的位置
         uint ppfInd = i*numRefPoints+j;
 
         THash* hashNode = &hash_nodes[i*numRefPoints+j];
-        hashNode->id = hashValue;
+        hashNode->fd = fd;
         hashNode->i = i;
         hashNode->ppfInd = ppfInd;
 
         hashtableInsertHashed_2(hashTable, hashValue, (void*)hashNode); // hashtableInsertHashed_2
 
-        Mat(f).reshape(1, 1).convertTo(ppf.row(ppfInd).colRange(0, 4), CV_32F);
-        ppf.ptr<float>(ppfInd)[4] = (float)theta;
+        Mat(f1_4).reshape(1, 1).convertTo(ppf.row(ppfInd).colRange(0, 4), CV_32F);
+        ppf.ptr<float>(ppfInd)[4] = (float)f5theta;
         ppf.ptr<float>(ppfInd)[5] = (float)alpha;
       }
     }
@@ -1118,9 +1145,16 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
     //    const Vec3f n2(sampled.ptr<float>(pInd) + 3);
 
         // 计算 F(sr, si)，离散化之后计算哈希值
-        Vec4d f = Vec4d::all(0);
-        computePPFFeatures(p1, n1, p2, n2, f);
-        KeyType hashValue = hashPPF(f, angle_step, distanceStep);
+        Vec4d f1_4 = Vec4d::all(0);
+        computePPFFeatures(p1, n1, p2, n2, f1_4);
+        /**** 计算 theta_s ****/
+        double f5theta = computeTheta(p1, n1, p2, n2);
+
+        //KeyType hashValue = hashPPF(f1_4, angle_step, distanceStep);
+        //KeyType hashValue = hashPPF2(f1_4, f5theta, angle_step, distanceStep, orientation_diff_threshold);
+        Vec<int, 5> fd;
+        KeyType hashValue = hashPPF3(f1_4, f5theta, fd, angle_step, distanceStep, orientation_diff_threshold);
+
         // 计算 alpha_s
         Vec3d p2t;
         double alpha_scene;
@@ -1134,9 +1168,6 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
           alpha_scene=-alpha_scene;
         alpha_scene=-alpha_scene;
 
-        /********/
-        //计算 theta_s
-        double theta_s = computeTheta(p1, n1, p2, n2);
 
         // 根据哈希值索引具有相似特征的模型点对(mr, mi)，因为离散化，F(sr, si) 约等于 F(mr, mi)，这有助于抵抗噪声
         // 得到模型点对集合 A = {(mr, mi), (mr', mi'), ...}
@@ -1146,21 +1177,27 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
         {
             // 对于匹配到的一个模型点对(mr, mi)
             THash* tData = (THash*) node->data;
+            if (!(tData->fd == fd)) { node = node->next; continue; }
+
             // mr的下标r, r属于[0, |M|-1]
             int corrI = (int)tData->i;
             // 模型点对(mr, mi)的特征在矩阵ppf中的位置
             int ppfInd = (int)tData->ppfInd;
             float* ppfCorrScene = ppf.ptr<float>(ppfInd);
             
-            /********/
-            // 比较theta_m, theta_s，若 theta_s - theta_m \in [-10deg, +10deg]，则认为他们匹配
-            double theta_m = (double)ppfCorrScene[PPF_LENGTH - 2];
-            //double thres = 2. / 180. * M_PI;
-            double delta_theta = theta_s - theta_m;
-            if (delta_theta < -orientation_diff_threshold || delta_theta > orientation_diff_threshold) {
-                node = node->next;
-                continue;
-            }
+            /**** 比较theta_m, theta_s，若 theta_s - theta_m \in [-10deg, +10deg]，则认为他们匹配 ****/
+            //double theta_m = (double)ppfCorrScene[PPF_LENGTH - 2];
+            //double delta_theta = f5theta - theta_m;
+            //double angle_m = theta_m / M_PI * 180;
+            //double angle_s = f5theta / M_PI * 180;
+            //double angle_delta = delta_theta / M_PI * 180;
+            //int bin_m = (int)(theta_m / orientation_diff_threshold);
+            //int bin_s = (int)(f5theta / orientation_diff_threshold);
+            //if (delta_theta < -orientation_diff_threshold || delta_theta > orientation_diff_threshold) {
+            //    cout << delta_theta / M_PI * 180 << endl;
+            //    node = node->next;
+            //    continue;
+            //}
 
 
             // 取出(mr, mi)对应的alpha_model
@@ -1697,8 +1734,8 @@ void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, char* scoreType, st
                 writePLY(pct_pred, (debugName + ".ply").c_str());
 
                  //save votes' point cloud
-                //if (stage == "afterHoughVot") {
-                if (0) {
+                if (stage == "afterHoughVot") {
+                //if (0) {
                     Mat votes = Pose->voters;
                     string votesNameSi = debugName + "_si" + ".ply";
                     string votesNameMi = debugName + "_mi" + ".ply";

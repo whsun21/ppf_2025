@@ -46,6 +46,7 @@ typedef struct THash
 {
   int id;
   int i, ppfInd;
+  Vec<int, 5> fd;
 } THash;
 
 /**
