@@ -14,6 +14,8 @@
 #include <opencv2/core/eigen.hpp>
 #include <boost/algorithm/string.hpp>
 
+#include<algorithm>
+
 using namespace std;
 using namespace cv;
 using namespace ppf_match_3d;
@@ -255,9 +257,9 @@ int evalUwa(string & Method) {
             //cout << center.row(0) << endl;
             Mat ctt_gt = transformPCPose(center, gt_pose); //pc是原始模型
             Mat ctt_pred = transformPCPose(center, pred_pose); //pc是原始模型
-            Vec3f cd = ctt_gt.at<Vec3f>(0) - ctt_pred.at<Vec3f>(0);
-            //cout << ctt_gt.at<Vec3f>(0) << endl;
-            //cout << ctt_pred.at<Vec3f>(0) << endl;
+            Vec3f cd = ctt_gt.at<Vec3f>(0,0) - ctt_pred.at<Vec3f>(0,0);
+            //cout << ctt_gt.at<Vec3f>(0,0) << endl;
+            //cout << ctt_pred.at<Vec3f>(0,0) << endl;
             //cout << cd << endl;
             centerErrorMap[modelNameInCfg].push_back(cv::norm(cd));
 
@@ -545,6 +547,530 @@ int rateUwa(string& Method) {
     return 0;
 }
 
+/*目标是比较 predicted pose 和 gt pose*/
+int evalRateIcbin(string& Method) {
+    string method = Method;
+    cout << "*****************************  " << method << "  *****************************" << endl;
+
+    string dataName = "icbin";
+    double ADI_scale = 0.1;
+    cout << "eval & rate " << dataName << " scenario2" << ", ADI_scale = " << ADI_scale << endl;
+
+    string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/IC-BIN-cvpr16/cvpr16_scenario_2/";
+    //string configPath = "3D models/Mian/";
+    string predPath = "D:/wenhao.sun/Documents/GitHub/1-project/testResults/" + method + "Results/" + dataName + "/";
+    string modelPath = rootPath + "meshes/";
+    string evalFileRootPath = "D:/wenhao.sun/Documents/GitHub/1-project/eval/" + method + "Eval/" + dataName + "/";
+
+    vector<string> scenariolist = { "coffee_cup", "juice", "mixed"};
+    vector<string> uwaModelName{ "coffee_cup", "juice"}; //['coffee_cup', 'juice', 'mixed']
+    //cout << uwaModelName[0] << endl;
+    map< string, int> modelTPMap;
+    map< string, int> modelTotalNumMap;
+    //map< string, vector<double>> ADDMap;
+    //map< string, vector<double>> ADIMap;
+    //map< string, vector<double>> centerErrorMap;
+    //map< string, vector<double>> phiMap;
+    //map< string, vector<double>> dNormMap;
+    vector<double> times;
+    //map< string, vector<string>> checkTableMap;
+    map<string, double> rateADI;
+
+    for (int i = 0; i < uwaModelName.size(); i++) {
+        modelTPMap[uwaModelName[i]] = 0;
+        modelTotalNumMap[uwaModelName[i]] = 0;
+        //ADDMap[uwaModelName[i]] = vector<double>();
+        //ADIMap[uwaModelName[i]] = vector<double>();
+        //centerErrorMap[uwaModelName[i]] = vector<double>();
+        //phiMap[uwaModelName[i]] = vector<double>();
+        //dNormMap[uwaModelName[i]] = vector<double>();
+        //checkTableMap[uwaModelName[i]] = vector<string>();
+        rateADI[uwaModelName[i]] = 0;
+    }
+    //string ADDName              = evalFileRootPath + (string)"/eval_ADD.txt";
+    //string ADIName              = evalFileRootPath + (string)"/eval_ADI.txt";
+    //string centerErrorName      = evalFileRootPath + (string)"/eval_centerError.txt";
+    //string phiName              = evalFileRootPath + (string)"/eval_phi.txt";
+    //string dNormName            = evalFileRootPath + (string)"/eval_dNorm.txt";
+    //string timeName             = evalFileRootPath + (string)"/eval_time.txt";
+    //string occulsionName        = evalFileRootPath + (string)"/eval_occulsion.txt";
+    //string DiamtersName         = evalFileRootPath + (string)"/eval_Diamters.txt";
+    //string checkTableName       = evalFileRootPath + (string)"/checkTable.txt";
+
+    // 计算直径, center point
+    map<string, double> Diamters;
+    map<string, Vec3f> Centers;
+    map<string, Mat> modelPC;
+    string modelFilePath;
+    for (int i = 0; i < uwaModelName.size(); i++) {
+        modelFilePath = modelPath + uwaModelName[i] + "_eval.ply";
+        Mat pc = loadPLYSimple(modelFilePath.c_str(), 1);
+        modelPC[uwaModelName[i]] = pc;
+        Vec2f xRange, yRange, zRange;
+        computeBboxStd(pc, xRange, yRange, zRange);
+        float dx = xRange[1] - xRange[0];
+        float dy = yRange[1] - yRange[0];
+        float dz = zRange[1] - zRange[0];
+        float diameter = sqrt(dx * dx + dy * dy + dz * dz);
+        Diamters[uwaModelName[i]] = diameter;
+
+        Vec3f center;
+        center[0] = (xRange[1] + xRange[0]) / 2;
+        center[1] = (yRange[1] + yRange[0]) / 2;
+        center[2] = (zRange[1] + zRange[0]) / 2;
+        Centers[uwaModelName[i]] = center;
+    }
+
+
+    // for all senarios
+
+    for (auto scenarioName : scenariolist) {
+        string cfgsFile = rootPath + scenarioName + "_configs.txt";
+        vector<string> cfgNameAll;
+        ifstream cfg_ifs(cfgsFile);
+        string cfgName0;
+        while (getline(cfg_ifs, cfgName0)) {
+            cfgNameAll.push_back(cfgName0);
+        }
+        cfg_ifs.close();
+
+        // for all single scene
+        for (int icfg = 0; icfg < cfgNameAll.size(); icfg++) {
+            //for (int icfg = 0; icfg < 1; icfg++) {
+            
+            // the test unit is a singe scene, in which there're, let's say,
+            // 2 different types objects (1 with 9 instances, and the other 1 with 4 instances).
+            string& singleScene = cfgNameAll[icfg];
+            std::vector<std::string> mStr, mn;
+            boost::split(mStr, singleScene, boost::is_any_of(" "));
+            string sid = mStr[0]; // scene id
+            map<string, int> modelCountMap; // {"coffe": 9, "juice": 4}
+            for (int is = 1; is < mStr.size()-1; is=is+2) {
+                modelCountMap[mStr[is]] = atoi(mStr[is+1].c_str());
+                bool in = false;
+                for (auto modelName : uwaModelName) {
+                    if (modelName == mStr[is]) in = true;
+                }
+                if (!in) { cout << "error here, check it " << endl; exit(1); }
+            }
+
+            // for different models
+            // iterate over 2 different types objects
+            for (auto modelName : uwaModelName) { // model name in config
+                int modelCount = modelCountMap[modelName]; // model Count 9
+                if (modelCount == 0) continue;
+                //1. read predicted 9 poses
+                string predFilePath = predPath + scenarioName + "-" + sid + "-" + modelName + ".txt"; //mixed-36-coffee_cup
+                ifstream pred_ifs(predFilePath);
+                if (!pred_ifs.is_open()) exit(1);
+
+                // file head check
+                string modelNameModelCountInPred;
+                getline(pred_ifs, modelNameModelCountInPred); //coffee_cup=9
+                int eqn1 = modelNameModelCountInPred.find("=");
+                string modelNameInPred = modelNameModelCountInPred.substr(0, eqn1);
+                int modelCountInPred = atoi(modelNameModelCountInPred.substr(eqn1 + 1, modelNameModelCountInPred.length() - eqn1).c_str());
+                if (modelNameInPred != modelName) { cout << "not same: " << "scenario " << scenarioName << "scene " << singleScene << "pred " << predFilePath << endl; exit(1); }
+                if (modelCountInPred != modelCount) { cout << "not same: " << "scenario " << scenarioName << "scene " << singleScene << "pred " << predFilePath << endl; exit(1); }
+                // time
+                string timeStr;
+                getline(pred_ifs, timeStr);
+                int eqn2 = timeStr.find("=");
+                string timeStr2 = timeStr.substr(eqn2 + 1, timeStr.length() - eqn2);
+                //cout << timeStr2 << endl;
+                double time = stod(timeStr2, 0);
+                times.push_back(time);
+                // poses
+                vector<Matx44d> pred_poses(modelCount);
+                vector<float> scores(modelCount);
+                string idx_score;
+                for (int ip = 0; ip < modelCount; ip++) {
+                    pred_ifs >> idx_score; int n = idx_score.find("=");
+                    scores[ip] = stof(idx_score.substr(n + 1, idx_score.length() - n));
+                    for (int ii = 0; ii < 4; ii++)
+                        for (int jj = 0; jj < 4; jj++)
+                        {
+                            pred_ifs >> pred_poses[ip](ii, jj);
+                        }
+                }
+                pred_ifs.close();
+                // check scores, decrease order: 5, 4,3,2,1
+                for (int i = 0; i < scores.size() - 1; i++) {
+                    if (scores[i] < scores[i + 1]) {
+                        cout << "error in score order" << endl; exit(1);
+                    }
+                }
+
+                //2.  read 9 gt poses 
+                string gtPath; //coffee_cup1_0, modelname index sceneid, index from 1
+                vector<Matx44d> gt_poses(modelCount);
+                for (int igt = 0; igt < modelCount; igt++) {
+                    gtPath = rootPath + scenarioName + "/" + modelName+ to_string(igt + 1) + "_" + sid + ".txt";
+                    ifstream gt_ifs(gtPath);
+                    if (!gt_ifs.is_open()) { cout << "not open: " << gtPath << endl; exit(1); }
+                    for (int ii = 0; ii < 4; ii++)
+                        for (int jj = 0; jj < 4; jj++)
+                        {
+                            gt_ifs >> gt_poses[igt](ii, jj);
+                        }
+                    gt_ifs.close();
+                }
+
+
+                //3. assign tp https://zhuanlan.zhihu.com/p/37910324
+                // center tranformed by pose_pred pose_gt
+                vector<Mat> cp(modelCount), cg(modelCount);
+                Vec3f centerV = Centers[modelName];
+                Mat center = Mat(1, centerV.rows, CV_32F);
+                float* pcData = center.ptr<float>(0);
+                pcData[0] = (float)centerV[0];
+                pcData[1] = (float)centerV[1];
+                pcData[2] = (float)centerV[2];
+                for (int ic = 0; ic < modelCount; ic++) {
+                    cg[ic] = transformPCPose(center, gt_poses[ic]); 
+                    cp[ic] = transformPCPose(center, pred_poses[ic]); 
+                }
+                // assign tp for ever pred pose
+                vector<int> tp(modelCount, 0);
+                vector<int> fp(modelCount, 0);
+                vector<bool> gt_detected(modelCount, false);
+
+                double thres = ADI_scale * Diamters[modelName]; ///thres
+                Mat& pc = modelPC[modelName];
+
+                for (int ip = 0; ip < modelCount; ip++) {
+                    Mat pct_pred = transformPCPose(pc, pred_poses[ip]); //pc是原始模型
+                    Mat features;
+                    pct_pred.colRange(0, 3).copyTo(features);
+                    KDTree* model_tree = BuildKDTree(features);
+
+                    // compare with all gt pose
+                    vector<double> ADIpi(modelCount, 1e5);
+                    for (int igt = 0; igt < modelCount; igt++) {
+
+                        // prefilter with center distance
+                        Vec3f cd = cg[igt].at<Vec3f>(0,0) - cp[ip].at<Vec3f>(0,0); //https://www.cnblogs.com/hsy1941/p/8298314.html
+                        if (cv::norm(cd) < 0.5 * Diamters[modelName]) {
+                            // ADI
+                            Mat pct_gt = transformPCPose(pc, gt_poses[igt]); //pc是原始模型
+                            
+                            Mat queries;
+                            pct_gt.colRange(0, 3).copyTo(queries);
+                            //cout << pc.at<float>(0, 0) << pc.at<float>(0, 1) << pc.at<float>(0, 2) << endl;
+                            std::vector<std::vector<int>> indices;
+                            std::vector<std::vector<float>> dists;
+                            SearchKDTree(model_tree, queries, indices, dists, 1);
+                            double totalD_ADI = 0;
+                            for (int ii = 0; ii < queries.rows; ii++)
+                            {
+                                totalD_ADI += sqrt(dists[ii][0]);
+                            }
+                            totalD_ADI /= queries.rows;
+                            ADIpi[igt] = totalD_ADI;
+                        }
+
+                    }
+                    delete model_tree;
+
+                    double minValue = *min_element(ADIpi.begin(), ADIpi.end());
+                    int minPosition = min_element(ADIpi.begin(), ADIpi.end()) - ADIpi.begin();
+
+                    // take the minimum ADI
+                    if (minValue <= thres) {
+                        if (!gt_detected[minPosition]) { // not detected
+                            tp[ip] = 1;
+                            gt_detected[minPosition] = true; // mark as detected
+                        }
+                        else {
+                            fp[ip] = 1;
+                        }
+                    }
+                    else {
+                        fp[ip] = 1;
+                    }
+                }
+
+                // accumulate tp num, total num
+                int tpsum = 0;
+                for (auto x : tp)
+                    tpsum += x;
+                modelTPMap[modelName] += tpsum;
+                modelTotalNumMap[modelName] += modelCount;
+            }
+        }
+    }
+    
+    // ADI 
+    cout << "ADI " << endl;
+    double avergRecallADI = 0;
+    double recallSumADI = 0;
+    for (auto modelName : uwaModelName) {
+        rateADI[modelName] = (double)modelTPMap[modelName] / (double)modelTotalNumMap[modelName];
+        cout << " rateADI: " << modelTPMap[modelName] << " / " << modelTotalNumMap[modelName] << " = " << rateADI[modelName] << "          " << modelName << endl;
+        recallSumADI += rateADI[modelName];
+    }
+    avergRecallADI = recallSumADI / uwaModelName.size();
+    cout << "ADI recognition rate: " << " sum {recall of single obj} / obj num = " << avergRecallADI << endl;
+    cout << endl;
+
+    cout << "Time" << endl;
+    double avgAllInferenceTime = 0;
+    double sumTime = 0;
+    for (auto x : times) {
+        sumTime += x;
+    }
+    avgAllInferenceTime = sumTime / times.size();
+    cout << "Average time of all instances of all objects: " << "sum{inference time of one obj in a scene} / "<< times.size() <<" = " << avgAllInferenceTime << endl;
+    cout << endl;
+
+    return 0;
+}
+
+int evalRateLmo(string& Method) {
+    string method = Method;
+    cout << "*****************************  " << method << "  *****************************" << endl;
+
+    string dataName = "lmo";
+    double ADDADI_scale = 0.1;
+    vector<string> ADD_objs{ "Ape", "Can", "Cat", "Driller", "Duck", "Holepuncher" };
+    vector<string> ADI_objs = { "Eggbox", "Glue" };
+    cout << "eval & rate " << dataName << ", ADDADI_scale = " << ADDADI_scale << endl;
+    cout << "ADD_objs: " << "Ape Can Cat Driller Duck Holepuncher" << endl;
+    cout << "ADI_objs: " << "Eggbox Glue" << endl;
+
+    string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/lm_lmo_pvnet/OCCLUSION_LINEMOD/OCCLUSION_LINEMOD/";
+    string predPath = "D:/wenhao.sun/Documents/GitHub/1-project/testResults/" + method + "Results/" + dataName + "/";
+    string modelPath = rootPath + "models/";
+    string evalFileRootPath = "D:/wenhao.sun/Documents/GitHub/1-project/eval/" + method + "Eval/" + dataName + "/";
+
+    // test
+    //int sceneNum = 1214;
+    string cfgsFile = rootPath + "configs.txt";
+    // val
+    //int sceneNum = 20;
+    //string cfgsFile = rootPath + "val_configs.txt";
+
+    vector<string> uwaModelName{ "Ape", "Can", "Cat", "Driller", "Duck", "Eggbox", "Glue", "Holepuncher" };
+    //cout << uwaModelName[0] << endl;
+    map< string, int> modelTPMap;
+    map< string, int> modelTotalNumMap;
+    //map< string, vector<double>> ADDMap;
+    //map< string, vector<double>> ADIMap;
+    //map< string, vector<double>> centerErrorMap;
+    //map< string, vector<double>> phiMap;
+    //map< string, vector<double>> dNormMap;
+    vector<double> times;
+    //map< string, vector<string>> checkTableMap;
+    map<string, double> rateADDADI;
+
+    for (int i = 0; i < uwaModelName.size(); i++) {
+        modelTPMap[uwaModelName[i]] = 0;
+        modelTotalNumMap[uwaModelName[i]] = 0;
+        //ADDMap[uwaModelName[i]] = vector<double>();
+        //ADIMap[uwaModelName[i]] = vector<double>();
+        //centerErrorMap[uwaModelName[i]] = vector<double>();
+        //phiMap[uwaModelName[i]] = vector<double>();
+        //dNormMap[uwaModelName[i]] = vector<double>();
+        //checkTableMap[uwaModelName[i]] = vector<string>();
+        rateADDADI[uwaModelName[i]] = 0;
+    }
+    //string ADDName              = evalFileRootPath + (string)"/eval_ADD.txt";
+    //string ADIName              = evalFileRootPath + (string)"/eval_ADI.txt";
+    //string centerErrorName      = evalFileRootPath + (string)"/eval_centerError.txt";
+    //string phiName              = evalFileRootPath + (string)"/eval_phi.txt";
+    //string dNormName            = evalFileRootPath + (string)"/eval_dNorm.txt";
+    //string timeName             = evalFileRootPath + (string)"/eval_time.txt";
+    //string occulsionName        = evalFileRootPath + (string)"/eval_occulsion.txt";
+    //string DiamtersName         = evalFileRootPath + (string)"/eval_Diamters.txt";
+    //string checkTableName       = evalFileRootPath + (string)"/checkTable.txt";
+
+    // 计算直径, center point
+    map<string, double> Diamters;
+    map<string, Vec3f> Centers;
+    map<string, Mat> modelPC;
+    string modelFilePath;
+    for (int i = 0; i < uwaModelName.size(); i++) {
+        modelFilePath = modelPath + uwaModelName[i] + "_eval.ply";
+        Mat pc = loadPLYSimple(modelFilePath.c_str(), 1);
+        modelPC[uwaModelName[i]] = pc;
+        Vec2f xRange, yRange, zRange;
+        computeBboxStd(pc, xRange, yRange, zRange);
+        float dx = xRange[1] - xRange[0];
+        float dy = yRange[1] - yRange[0];
+        float dz = zRange[1] - zRange[0];
+        float diameter = sqrt(dx * dx + dy * dy + dz * dz);
+        Diamters[uwaModelName[i]] = diameter;
+
+        Vec3f center;
+        center[0] = (xRange[1] + xRange[0]) / 2;
+        center[1] = (yRange[1] + yRange[0]) / 2;
+        center[2] = (zRange[1] + zRange[0]) / 2;
+        Centers[uwaModelName[i]] = center;
+    }
+
+
+
+    vector<string> cfgNameAll;
+    ifstream cfg_ifs(cfgsFile);
+    string cfgName0;
+    while (getline(cfg_ifs, cfgName0)) {
+        cfgNameAll.push_back(cfgName0);
+    }
+    cfg_ifs.close();
+
+    // for single model
+    for (int icfg = 0; icfg < cfgNameAll.size(); icfg++) {
+        //for (int icfg = 6; icfg < 8; icfg++) {
+
+        // the test unit is a singe model
+        string& singleModel = cfgNameAll[icfg];
+        std::vector<std::string> mStr, mn;
+        boost::split(mStr, singleModel, boost::is_any_of(" "));
+        string modelName = mStr[0]; // obj id
+        vector<string> scenes(mStr.begin() + 1, mStr.end());
+
+        double thres = ADDADI_scale * Diamters[modelName]; ///thres
+        bool useADD = (find(ADD_objs.begin(), ADD_objs.end(), modelName) != ADD_objs.end());
+
+        // for every scene
+        //for (auto scene : scenes) {
+        for (int iscene = 0; iscene < scenes.size(); iscene++) {
+            string scene = scenes[iscene];
+            // model i in scene j
+            //1.  read pred pose
+            string predFilePath = predPath + modelName + "-" + scene + ".txt"; //Ape-00010
+            ifstream pred_ifs(predFilePath);
+            if (!pred_ifs.is_open()) exit(1);
+
+            // file head check
+            string modelNameModelCountInPred;
+            getline(pred_ifs, modelNameModelCountInPred); //Duck=1
+            // time
+            string timeStr;
+            getline(pred_ifs, timeStr);
+            int eqn2 = timeStr.find("=");
+            string timeStr2 = timeStr.substr(eqn2 + 1, timeStr.length() - eqn2);
+            double time = stod(timeStr2, 0);
+            times.push_back(time);
+            // score
+            string idx_score;
+            pred_ifs >> idx_score; 
+
+            // poses
+            Matx44d pred_pose;
+            for (int ii = 0; ii < 4; ii++)
+                for (int jj = 0; jj < 4; jj++)
+                {
+                    pred_ifs >> pred_pose(ii, jj);
+                }
+            pred_ifs.close();
+
+            //2.  read gt pose 
+            string gtPath = rootPath + "poses/" + modelName + "/info_" + scene + ".txt"; // info_00000
+            ifstream gt_ifs(gtPath);
+            if (!gt_ifs.is_open()) { cout << "not open: " << gtPath << endl; exit(1); }
+            string filehead;
+            getline(gt_ifs, filehead);
+            getline(gt_ifs, filehead);
+            getline(gt_ifs, filehead);
+            getline(gt_ifs, filehead);
+            if (filehead == "") { 
+                cout << "error in load gt: " << gtPath << endl;
+                exit(1);
+            }
+            Matx33d gt_rotation;
+            Vec3d gt_translation;
+            for (int ii = 0; ii < 3; ii++)
+                for (int jj = 0; jj < 3; jj++)
+                {
+                    gt_ifs >> gt_rotation(ii, jj);
+                }
+            gt_ifs >> filehead;
+            for (int it = 0; it < 3; it++)
+                gt_ifs >> gt_translation(it);
+            gt_ifs.close();
+            Matx44d gt_pose;
+            rtToPose(gt_rotation, gt_translation, gt_pose);
+
+            //3. compute ADD(I)
+
+            Mat& pc = modelPC[modelName];
+            Mat pct_gt = transformPCPose(pc, gt_pose); //pc是原始模型
+            Mat pct_pred = transformPCPose(pc, pred_pose); //pc是原始模型
+
+            if (useADD) {
+                // ADD
+                double totalD_ADD = 0;
+                for (int ii = 0; ii < pct_gt.rows; ii++)
+                {
+                    Vec3f v1(pct_gt.ptr<float>(ii));
+                    //const Vec3f n1(pct_gt.ptr<float>(ii) + 3);
+                    Vec3f v2(pct_pred.ptr<float>(ii));
+                    v1 = v1 - v2;
+                    totalD_ADD += cv::norm(v1);
+                }
+                totalD_ADD /= pct_gt.rows;
+                if (totalD_ADD < thres) {
+                    modelTPMap[modelName] += 1;
+                }
+            }
+            else {
+                // ADI
+                Mat features;
+                Mat queries;
+                pct_gt.colRange(0, 3).copyTo(features);
+                pct_pred.colRange(0, 3).copyTo(queries);
+
+                //cout << pc.at<float>(0, 0) << pc.at<float>(0, 1) << pc.at<float>(0, 2) << endl;
+
+                KDTree* model_tree = BuildKDTree(features);
+                std::vector<std::vector<int>> indices;
+                std::vector<std::vector<float>> dists;
+                SearchKDTree(model_tree, queries, indices, dists, 1);
+                delete model_tree;
+                double totalD_ADI = 0;
+                for (int ii = 0; ii < queries.rows; ii++)
+                {
+                    totalD_ADI += sqrt(dists[ii][0]);
+                }
+                totalD_ADI /= queries.rows;
+                if (totalD_ADI < thres) {
+                    modelTPMap[modelName] += 1;
+                }
+            }
+            
+            modelTotalNumMap[modelName] += 1;
+
+
+        }
+    }
+
+    // ADI 
+    cout << "ADD & ADI " << endl;
+    double avergRecall = 0;
+    double recallSum = 0;
+    for (auto modelName : uwaModelName) {
+        rateADDADI[modelName] = (double)modelTPMap[modelName] / (double)modelTotalNumMap[modelName];
+        cout << " rateADI: " << modelTPMap[modelName] << " / " << modelTotalNumMap[modelName] << " = " << rateADDADI[modelName] << "          " << modelName << endl;
+        recallSum += rateADDADI[modelName];
+    }
+    avergRecall = recallSum / uwaModelName.size();
+    cout << "ADI recognition rate: " << " sum {recall of single obj} / obj num = " << avergRecall << endl;
+    cout << endl;
+
+    cout << "Time" << endl;
+    double avgAllInferenceTime = 0;
+    double sumTime = 0;
+    for (auto x : times) {
+        sumTime += x;
+    }
+    avgAllInferenceTime = sumTime / times.size();
+    cout << "Average time of all instances of all objects: " << "sum{inference time of one obj in a scene} / " << times.size() << " = " << avgAllInferenceTime << endl;
+    cout << endl;
+
+    return 0;
+}
+
 int main() {
 #if (defined __x86_64__ || defined _M_X64)
     cout << "Running on 64 bits" << endl;
@@ -557,11 +1083,18 @@ int main() {
 #else
     cout << "Running without OpenMP and without TBB" << endl;
 #endif
-    //string method = "halcon";
-    string method = "ppf_2025";
+    string method = "halcon";
+    //string method = "ppf_2025";
 
-    evalUwa(method);
-    rateUwa(method);
+    // uwa
+    //evalUwa(method);
+    //rateUwa(method);
+
+    // icbin
+    //evalRateIcbin(method);
+
+    // lmo
+    evalRateLmo(method);
 
 
     //writeMap();
