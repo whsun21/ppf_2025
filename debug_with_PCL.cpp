@@ -1,9 +1,22 @@
 // pcl
 #include <iostream>
 
-#include <pcl/visualization/pcl_visualizer.h>
+//#include <pcl/visualization/pcl_visualizer.h>
 #include <pcl/common/io.h>
+//#include <pcl/io/ply_io.h>
+
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+
 #include <pcl/io/ply_io.h>
+
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/filters/extract_indices.h>
+#include <pcl/visualization/pcl_visualizer.h>
+#include <pcl/search/kdtree.h> //下一小节使用
+
+#include "opencv2/core/utility.hpp"
+#include "surface_matching/ppf_helpers.hpp"
 
 
 using namespace std;
@@ -104,6 +117,113 @@ int showVotes() {
     return 0;
 }
 
+int getPlane() {
+    string scene_p = "D:/wenhao.sun/Documents/datasets/object_recognition/IC-BIN-cvpr16/cvpr16_scenario_2/coffee_cup/cloud/cloud26.ply";
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in(new pcl::PointCloud<pcl::PointXYZ>);
+    //pcl::io::loadPLYFile(scene_p, *cloud_in);
+    PointCloud<PointNormal>::Ptr cloud_pn(new PointCloud<PointNormal>());
+    if (pcl::io::loadPLYFile(scene_p, *cloud_pn) == -1)
+    {
+        PCL_ERROR("read false");
+        return 0;
+    }
+    pcl::copyPointCloud(*cloud_pn, *cloud_in);
+
+
+    pcl::SACSegmentation<pcl::PointXYZ> seg(true);
+    seg.setOptimizeCoefficients(true);
+    seg.setModelType(pcl::SACMODEL_PLANE);
+    seg.setMethodType(pcl::SAC_PROSAC); //SAC_RANSAC
+    seg.setMaxIterations(10);
+    seg.setDistanceThreshold(0.08);
+
+    //pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);//下一小节使用
+
+    //pcl::ExtractIndices<pcl::PointXYZ> extract;
+    pcl::ExtractIndices<pcl::PointNormal> extract;
+
+    pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
+    //std::vector<pcl::ModelCoefficients> coeffs(3);
+    //std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> planes(3);
+    //pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_copy(new pcl::PointCloud<pcl::PointXYZ>);
+    
+    pcl::ModelCoefficients coeff;
+    //pcl::PointCloud<pcl::PointXYZ>::Ptr plane;
+
+    //*cloud_copy = *cloud_in;
+
+    pcl::PointCloud<pcl::PointNormal>::Ptr plane(new pcl::PointCloud<pcl::PointNormal>);
+    pcl::PointCloud<pcl::PointNormal>::Ptr keeped(new pcl::PointCloud<pcl::PointNormal>);
+    seg.setInputCloud(cloud_in);
+    //tree->setInputCloud(cloud_copy);//下一小节使用
+    //seg.setSamplesMaxDist(3, tree);//下一小节使用
+    seg.segment(*inliers, coeff);
+
+    extract.setInputCloud(cloud_pn);
+    extract.setIndices(inliers);
+    extract.setNegative(false);
+    extract.filter(*plane);
+    extract.setNegative(true);
+    extract.filter(*keeped);
+
+    cv::Mat pcTest = cv::Mat(keeped->size(), 6, CV_32FC1);
+    for (int i = 0; i < keeped->size(); i++)
+    {
+        float* data = pcTest.ptr<float>(i);
+        // scene_normal->at(i).x *= 1000.0;
+        // scene_normal->at(i).y *= 1000.0;
+        // scene_normal->at(i).z *= 1000.0;
+        data[0] = keeped->at(i).x;
+        data[1] = keeped->at(i).y;
+        data[2] = keeped->at(i).z;
+        data[3] = keeped->at(i).normal_x;
+        data[4] = keeped->at(i).normal_y;
+        data[5] = keeped->at(i).normal_z;
+    }
+    cv::ppf_match_3d::writePLY(pcTest, "seg.ply");
+    
+
+    //plane = cloud_temp;
+
+    //for (int i = 0; i < 3; i++) {
+    //    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_temp(new pcl::PointCloud<pcl::PointXYZ>);
+    //    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_remaining(new pcl::PointCloud<pcl::PointXYZ>);
+    //    seg.setInputCloud(cloud_copy);
+    //    //tree->setInputCloud(cloud_copy);//下一小节使用
+    //    //seg.setSamplesMaxDist(3, tree);//下一小节使用
+    //    seg.segment(*inliers, coeffs[i]);
+
+    //    extract.setInputCloud(cloud_copy);
+    //    extract.setIndices(inliers);
+    //    extract.setNegative(false);
+    //    extract.filter(*cloud_temp);
+    //    extract.setNegative(true);
+    //    extract.filter(*cloud_remaining);
+
+    //    planes[i] = cloud_temp;
+    //    cloud_copy = cloud_remaining;
+    //}
+
+    pcl::visualization::PCLVisualizer::Ptr viewer(new pcl::visualization::PCLVisualizer("viewer"));
+    int v1 = 1;
+    viewer->createViewPort(0, 0, 1, 1, v1);
+    viewer->setBackgroundColor(1, 1, 1, v1);
+    //viewer->addPointCloud(cloud_in, pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ>(cloud_in, 255, 255, 0), "cloud_in");
+    viewer->addPointCloud(keeped, pcl::visualization::PointCloudColorHandlerCustom<pcl::PointNormal>(keeped, 255, 0, 0), "keeped");
+    viewer->addPointCloud(plane, pcl::visualization::PointCloudColorHandlerCustom<pcl::PointNormal>(plane, 0, 255, 0), "plane");
+    //viewer->addPointCloud(planes[0], pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ>(planes[0], 255, 0, 0), "plane1");
+    //viewer->addPointCloud(planes[1], pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ>(planes[1], 0, 255, 0), "plane2");
+    //viewer->addPointCloud(planes[2], pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ>(planes[2], 0, 0, 255), "plane3");
+
+    while (!viewer->wasStopped()) {
+        viewer->spinOnce(10);
+    }
+    
+
+
+    return 0;
+}
+
 int main(int argc, char** argv) {
 #if (defined __x86_64__ || defined _M_X64)
     cout << "Running on 64 bits" << endl;
@@ -123,7 +243,9 @@ int main(int argc, char** argv) {
     //testUwa();
     //debugUwaFailureCases(method);
     //debug(argv);
-    showVotes();
+    //showVotes();
+
+    getPlane();
 
 }
 

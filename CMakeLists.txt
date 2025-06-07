@@ -90,6 +90,10 @@ target_link_libraries (debug_with_PCL PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES
 debug yaml-cppd.lib 
 optimized  yaml-cpp.lib ) 
 
+add_executable (ppf_pavel PPF_matching_v2_20210708.cpp)
+# target_link_libraries (ppf_main ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp yaml-cpp.a)
+target_link_libraries (ppf_pavel PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp  ${DISCREGRID_LIBRARIES}) 
+
 #add_executable (ppf_normal_computation samples/ppf_normal_computation.cpp)
 #target_link_libraries (ppf_normal_computation PUBLIC ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} ppf_match_3d ppf_helpers icp )
 

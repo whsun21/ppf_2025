@@ -1,11 +1,19 @@
 
 #include "precomp.hpp"
 #include "hash_murmur.hpp"
-#include "Eigen/Dense"
-#include "Eigen/Core"
+
 #include <opencv2/core/eigen.hpp>
 #include "IcpOptimizer.h"
 //#include "surface_matching/poisson_disk_sampling.hpp"
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/filters/extract_indices.h>
+
+#include "Eigen/Core"
+#include "Eigen/Geometry"
+#include "Eigen/StdVector"
+#include "Eigen/Dense"
 
 
 using namespace Eigen;
@@ -29,6 +37,12 @@ static bool pose3DPtrCompareOverlap(const Pose3DPtr& a, const Pose3DPtr& b)
 {
     CV_Assert(!a.empty() && !b.empty()); 
     return (a->overlap > b->overlap);
+}
+
+static bool pose3DPtrCompareClusterCount(const Pose3DPtr& a, const Pose3DPtr& b)
+{
+    CV_Assert(!a.empty() && !b.empty());
+    return (a->cluster_count > b->cluster_count);
 }
 
 static bool pose3DPtrCompareIntersecNum(const Pose3DPtr& a, const Pose3DPtr& b)
@@ -165,7 +179,7 @@ PPF3DDetector::PPF3DDetector()
 PPF3DDetector::PPF3DDetector(const double RelativeSamplingStep, const double RelativeDistanceStep, const double NumAngles)
 {
   sampling_step_relative = RelativeSamplingStep;
-  distance_step_relative = RelativeDistanceStep;
+  distance_step_relative = RelativeDistanceStep; // 用不到
   angle_step_relative = NumAngles;
   angle_step_radians = (360.0/angle_step_relative)*M_PI/180.0;
   //SceneSampleStep = 1.0/RelativeSceneSampleStep;
@@ -179,6 +193,7 @@ PPF3DDetector::PPF3DDetector(const double RelativeSamplingStep, const double Rel
   setSamplingMethod((string)"cube");
   //setOrientationDiffThreshold(2. / 180. * M_PI);  // 不要在这里设置,错误的根源
   setNMSThreshold(0.5);
+  enableFreeSpaceConstraint(true);
   //setSearchParams();
 }
 
@@ -208,7 +223,9 @@ Mat PPF3DDetector::getSampledModel()
 void PPF3DDetector::enableDebug(bool Debug) {
     debug = Debug;
 }
-
+void PPF3DDetector::enableFreeSpaceConstraint(bool usfs) {
+    useFreeSpaceConstraint = usfs;
+}
 void PPF3DDetector::setSceneKeypointForDebug(Mat& PC) {
     debug_sampled_scene_ref = PC;
 }
@@ -223,6 +240,28 @@ void PPF3DDetector::setGtPose(Matx44d& Pose) {
     gtPoseModel = transformPCPose(sampled_pc, Pose);
 }
 
+void PPF3DDetector::setMultiGtPose(std::vector<Matx44d>& Poses, std::string & debugGTPoseModelPath) {
+    if (!trained)
+    {
+        throw cv::Exception(cv::Error::StsError, "The model is not trained. Cannot setGtPose without training", __FUNCTION__, __FILE__, __LINE__);
+    }
+
+    multi_gt_pose = Poses;
+    use_multi_gt_pose = true;
+    Mat center = Mat(1, model_center.rows, CV_32F);
+    float* pcData = center.ptr<float>(0);
+    pcData[0] = (float)model_center[0];
+    pcData[1] = (float)model_center[1];
+    pcData[2] = (float)model_center[2];
+    multi_gt_pose_model.resize(Poses.size());
+    multi_gt_pose_center.resize(Poses.size());
+    for (int i = 0; i < Poses.size(); i++) {
+        multi_gt_pose_model[i] = transformPCPose(sampled_pc, Poses[i]);
+        multi_gt_pose_center[i] = transformPCPose(center, Poses[i]);
+        writePLY(multi_gt_pose_model[i], (debugGTPoseModelPath+"debug_gt_pose_"+to_string(i)+".ply").c_str());
+        
+    }
+}
 void PPF3DDetector::saveGTPoseModel(std::string& path) {
     if (!trained)
     {
@@ -242,6 +281,10 @@ void PPF3DDetector::setNMSThreshold(double th) {
     nmsThreshold = th;
 }
 
+void PPF3DDetector::setClusterThreshold(double th) {
+    clusterThreshold = th;
+}
+
 void PPF3DDetector::setOrientationDiffThreshold(double th) {
     orientation_diff_threshold = th;
 }
@@ -249,42 +292,11 @@ void PPF3DDetector::setSDF(std::shared_ptr < Discregrid::DiscreteGrid>& sdfPtr) 
     sdf_ptr = sdfPtr;
 }
 
-void PPF3DDetector::generateFreeSpaceVolume(float& resulotion) {
-    // free space volume
-    float step_size = 4 * resulotion;
-    int step_num = 0;
-    Eigen::Vector3f origin(0, 0, 0);
-    Eigen::Vector3f scene_point;
-    Eigen::Vector3f t;
-    Eigen::Vector3f d;
-    Eigen::Vector3f pj;
-    vector<Eigen::Vector3f> all_pts;
-    Eigen::MatrixXf scene_cloud;
-    cv::cv2eigen(downsample_scene, scene_cloud);
-    for (size_t i = 0; i < scene_cloud.rows(); ++i) {
-        scene_point = scene_cloud.row(i).leftCols(3);
-        t= origin- scene_point;
-        step_num = t.norm() / step_size;
-        t.normalize();
-        d = step_size * t;
-        
-        pj = scene_point + 0.5 * resulotion * t; // first layer
-        all_pts.push_back(pj);
-
-        for (size_t j = 1; j < step_num/8; ++j) {
-            pj = scene_point + j * d;
-            all_pts.push_back(pj);
-        }
-    }
-
-    Eigen::Matrix<float, -1, 3, 1> volume;
-    volume.resize(all_pts.size(), 3);
-    for (size_t k = 0; k < all_pts.size(); k++) {
-        volume.row(k) = all_pts[k];
-    }
-    cv::eigen2cv(volume, downsample_scene_freespace);
-    //string prefix = "../samples/data/results/" + debug_folder_name;
-    //writePLY(downsample_scene_freespace, (prefix +"/fs.ply").c_str());
+void PPF3DDetector::setPPFAngleConstraint(double& angle) {
+    ppf_angle_constraint = angle;
+}
+void PPF3DDetector::setPPFDistanceConstraint(double& dist_th) {
+    ppf_distance_constraint = dist_th;
 }
 
 // compute per point PPF as in paper
@@ -323,6 +335,25 @@ PPF3DDetector::~PPF3DDetector()
   clearTrainingModels();
 }
 
+
+void PPF3DDetector::setModelTriplet(Vec3f& center, float diameter) {
+    model_triplet = Mat(3, 3, CV_32F);
+    float* pcData = model_triplet.ptr<float>(0);
+    pcData[0] = (float)center[0];
+    pcData[1] = (float)center[1];
+    pcData[2] = (float)center[2];
+    pcData = model_triplet.ptr<float>(1);
+    pcData[0] = (float)center[0]+ diameter;
+    pcData[1] = (float)center[1];
+    pcData[2] = (float)center[2];
+    pcData = model_triplet.ptr<float>(2);
+    pcData[0] = (float)center[0];
+    pcData[1] = (float)center[1] + diameter;
+    pcData[2] = (float)center[2];
+
+}
+
+
 // TODO: Check all step sizes to be positive
 void PPF3DDetector::trainModel(const Mat &PC)
 {
@@ -344,10 +375,24 @@ void PPF3DDetector::trainModel(const Mat &PC)
   modelCenter(2) = (zRange[1] + zRange[0]) / 2;
   model_center = modelCenter;
   model_minimum_length = std::min({ dx, dy, dz });
+  model_bbox = Mat(8, 3, CV_32F);
+  for (int i = 0; i< 2; i++) {
+      for (int j = 0; j < 2; j++) {
+          for (int k = 0; k < 2; k++) {
+              int ind = i * 2 * 2 + j * 2 + k;
+              float* pcData = model_bbox.ptr<float>(ind);
+              pcData[0] = (float)xRange[i];
+              pcData[1] = (float)yRange[j];
+              pcData[2] = (float)zRange[k];
+          }
+      }
+  }
+  setModelTriplet(modelCenter, diameter);
 
   float distanceStep = (float)(diameter * sampling_step_relative);
+  //float distanceStepFeature = (float)(diameter * distance_step_relative);
   //distanceStep /= 2;
-  float distanceStepRefine = (float)(distanceStep / 2);
+  float distanceStepRefine = (float)(diameter * 0.01);
 
   //Mat sampled0 = samplePCByQuantization(PC, xRange, yRange, zRange, (float)sampling_step_relative,0);
   //writePLY(sampled0, "../samples/data/results/sampled_model0.ply");
@@ -409,6 +454,10 @@ void PPF3DDetector::trainModel(const Mat &PC)
 
         Vec4d f1_4 = Vec4d::all(0);
         computePPFFeatures(p1, n1, p2, n2, f1_4);
+
+        if (abs(f1_4[0] - M_PI/2) < ppf_angle_constraint) continue;
+        if (f1_4[3] < ppf_distance_constraint * distanceStep) continue;
+
         double f5theta = computeTheta(p1, n1, p2, n2);
 
         //KeyType hashValue = hashPPF(f1_4, angle_step_radians, distanceStep);
@@ -420,7 +469,7 @@ void PPF3DDetector::trainModel(const Mat &PC)
         uint ppfInd = i*numRefPoints+j;
 
         THash* hashNode = &hash_nodes[i*numRefPoints+j];
-        hashNode->fd = fd;
+        hashNode->fd = fd; //
         hashNode->i = i;
         hashNode->ppfInd = ppfInd;
 
@@ -432,7 +481,7 @@ void PPF3DDetector::trainModel(const Mat &PC)
       }
     }
   }
-  setSearchParams(diameter / 10.0, angle_step_radians, false);  //作者建议位移阈值diam（M ）/10
+  setSearchParams(diameter / 5.0, angle_step_radians*10, false);  //angle_step_radians, 作者建议位移阈值diam（M ）/10
   //setSearchParams(distanceStep, angle_step_radians, false);  //作者建议位移阈值diam（M ）/10
 
   angle_step = angle_step_radians;
@@ -501,14 +550,17 @@ void PPF3DDetector::overlapRatio(std::vector<Pose3DPtr>& results, double thresho
 
 }*/
 
-void PPF3DDetector::overlapRatio(const Mat& srcPC, const Mat& dstPC, void* dstFlann, std::vector<Pose3DPtr>& resultsS, double threshold, double anglethreshold)
+void PPF3DDetector::overlapRatio(const Mat& srcPC, const Mat& dstPC, void* dstFlann, std::vector<Pose3DPtr>& resultsS, double threshold, double anglethreshold, int num_neighbors)
 {
     double thresholdlen = threshold ;
     thresholdlen = thresholdlen * thresholdlen;
 
-    double angle = -1.01;
+    double cos_angle_th = -1.01;
     if (anglethreshold < 180)
-        angle = cos(anglethreshold / 180 * M_PI);
+        cos_angle_th = cos(anglethreshold / 180 * M_PI);
+
+    int NumNeighbors = num_neighbors;
+
 
 #ifdef _OPENMP
 #pragma omp parallel for 
@@ -518,40 +570,135 @@ void PPF3DDetector::overlapRatio(const Mat& srcPC, const Mat& dstPC, void* dstFl
         Mat srcMoved = transformPCPose(srcPC, resultsS[i]->pose);
 
         size_t numElSrc = (size_t)srcPC.rows;
-        int sizesResult[2] = { (int)numElSrc, 1 };
-        float* distances = new float[numElSrc];
-        int* indices = new int[numElSrc];
 
-        Mat Indices(2, sizesResult, CV_32S, indices, 0);
-        Mat Distances(2, sizesResult, CV_32F, distances, 0);
+        //int sizesResult[2] = { (int)numElSrc, 1 };
+        //float* distances = new float[numElSrc];
+        //int* indices = new int[numElSrc];
+        //Mat Indices(2, sizesResult, CV_32S, indices, 0);
+        //Mat Distances(2, sizesResult, CV_32F, distances, 0);
+        //queryPCFlann(dstFlann, srcMoved, Indices, Distances);
 
-        queryPCFlann(dstFlann, srcMoved, Indices, Distances);
+        Mat Distances(srcPC.rows, NumNeighbors, CV_32F);
+        Mat Indices(srcPC.rows, NumNeighbors, CV_32S);
+        queryPCFlann(dstFlann, srcMoved, Indices, Distances, NumNeighbors);
+
 
         int pointNum = 0;
         for (int j = 0; j < numElSrc; j++)
         {
+            //const Vec3f n1(srcMoved.ptr<float>(j) + 3);
+            //int sceneInd = Indices.at<int>(j);
+            //const Vec3f n2(dstPC.ptr<float>(sceneInd) + 3);
+            //double a = n1.dot(n2);
+            //if (Distances.at<float>(j) < thresholdlen)
+            //{
+            //    if (a > angle)
+            //    {
+            //        pointNum++;// sumnum_model(j);
+            //    }
+            //}
+            
             const Vec3f n1(srcMoved.ptr<float>(j) + 3);
-            int sceneInd = Indices.at<int>(j);
-            const Vec3f n2(dstPC.ptr<float>(sceneInd) + 3);
-
-            double a = n1.dot(n2);
-
-            if (Distances.at<float>(j) < thresholdlen)
+            const int* indLocal = Indices.ptr<int>(j);
+            const float* distLocal = Distances.ptr<float>(j);
+            for (int in = 0; in < NumNeighbors; ++in)
             {
-                if (a > angle)
+                int sceneInd = indLocal[in];
+                const Vec3f n2(dstPC.ptr<float>(sceneInd) + 3);
+                double cosa = n1.dot(n2);
+                float d = distLocal[in];
+                if (d < thresholdlen)
                 {
-                    pointNum++;// sumnum_model(j);
+                    if (cosa > cos_angle_th)
+                    {
+#if defined (_OPENMP)
+#pragma omp critical
+#endif
+                        {
+                            pointNum++;
+                        }
+                        break; // 找到一个就可以
+                    }
                 }
+
             }
+
+
         }
-        double Overlap = 1.0 * pointNum / numElSrc;
+        double Overlap = 1.0 * pointNum ; // / numElSrc
         resultsS[i]->updateOverlap(Overlap);
 
-        delete[] distances;
-        delete[] indices;
+        //delete[] distances;
+        //delete[] indices;
     }
 }
 
+
+void PPF3DDetector::generateFreeSpaceVolume(Mat& sampled_for_freespace, float resulotion) {
+    // free space volume
+    float step_size = 5 * resulotion;
+    //float step_size = resulotion; // sampled scene resolution
+    int step_num = 0;
+    Eigen::Vector3f origin(0, 0, 0);
+    Eigen::Vector3f scene_point;
+    Eigen::Vector3f t;
+    Eigen::Vector3f d;
+    Eigen::Vector3f pj;
+    vector<Eigen::Vector3f> all_pts;
+
+    Eigen::MatrixXf scene_cloud;
+    //cv::cv2eigen(sampled_for_freespace, scene_cloud);
+
+    Mat small = samplePCUniform(sampled_for_freespace, 2);
+    cv::cv2eigen(small, scene_cloud);
+
+    //Mat small;
+    //if (sampled_for_freespace.rows > 2000) {
+    //    int size = sampled_for_freespace.rows;
+    //    Mat cloud_copy;
+    //    sampled_for_freespace.copyTo(cloud_copy);
+    //    while (size > 2000) {
+    //        Mat small = samplePCUniform(cloud_copy, 2);
+    //        size = small.rows;
+    //        cloud_copy = small;
+    //    }
+    //    cv::cv2eigen(cloud_copy, scene_cloud);
+    //}
+    //else {
+    //    cv::cv2eigen(sampled_for_freespace, scene_cloud);
+    //}
+
+
+    for (size_t i = 0; i < scene_cloud.rows(); ++i) {
+        scene_point = scene_cloud.row(i).leftCols(3);
+        t = origin - scene_point;
+        step_num = t.norm() / step_size;
+        t.normalize();
+        d = step_size * t;
+
+        //pj = scene_point + resulotion * t; // first layer
+        //all_pts.push_back(pj);
+
+        for (size_t j = 1; j < step_num / 5; ++j) {
+            pj = scene_point + j * d;
+            all_pts.push_back(pj);
+        }
+    }
+
+    Eigen::Matrix<float, -1, 3, 1> volume;
+    volume.resize(all_pts.size(), 3);
+    for (size_t k = 0; k < all_pts.size(); k++) {
+        volume.row(k) = all_pts[k];
+    }
+    cv::eigen2cv(volume, scene_freespace);
+    if (debug) {
+        string prefix = "../samples/data/results/" + debug_folder_name;
+        writePLY(scene_freespace, (prefix + "/fs.ply").c_str());
+        //writePLY(scene_freespace, "fs.ply");
+    }
+
+}
+/*
 // free space intersection count
 void PPF3DDetector::freespaceIntersectionCount( std::vector<Pose3DPtr>& resultsS, std::vector<Pose3DPtr>& finalPoses, const int& th)
 {
@@ -590,7 +737,73 @@ void PPF3DDetector::freespaceIntersectionCount( std::vector<Pose3DPtr>& resultsS
         //cout << verts_sdf_contains.sum() <<endl;
     }
 }
+*/
+void PPF3DDetector::freespaceRatio(std::vector<Pose3DPtr>& resultsS, const double& th)
+{
+    double thresholdlen = th;
 
+
+    // sdf, inside is +, outside is -
+#ifdef _OPENMP
+#pragma omp parallel for 
+#endif
+    for (int i = 0; i < resultsS.size(); i++) {
+        //Eigen::VectorXi verts_sdf_overlap = MatrixXi::Zero(scene_freespace.rows, 1);
+        Eigen::VectorXi verts_sdf_beyond = MatrixXi::Zero(scene_freespace.rows, 1);
+        //Eigen::VectorXi verts_sdf_beyond  = MatrixXi::Zero(scene_freespace.rows, 1);
+        // transpose freespace
+        Mat freespaceMoved = transformPCPose(scene_freespace, resultsS[i]->pose.inv());
+
+        for (int k = 0; k < scene_freespace.rows; ++k)
+        {
+            float* sample = freespaceMoved.ptr<float>(k);
+            double d = sdf_ptr->interpolate(0, { sample[0], sample[1], sample[2] });
+            if (d == std::numeric_limits<double>::max()) { continue; }
+            if (d > thresholdlen) { verts_sdf_beyond(k) = 1; }
+            //if (abs(d) <= thresholdlen) { verts_sdf_overlap(k) = 1; }
+        }
+        //cout << "verts_sdf_overlap " << verts_sdf_overlap.sum() << endl;
+        //cout << "verts_sdf_beyond  "<< verts_sdf_beyond.sum() << endl;
+        //double Overlap = verts_sdf_overlap.sum() - 0.1 * verts_sdf_beyond.sum();
+        //double Overlap = verts_sdf_overlap.sum() ;
+        //double Overlap = verts_sdf_overlap.sum() ;
+        //resultsS[i]->updateOverlap(Overlap);
+        double beyond = verts_sdf_beyond.sum();
+        resultsS[i]->overlap -= 100* beyond;
+        resultsS[i]->freespaceIntersec = beyond;
+
+
+    }
+}
+
+void PPF3DDetector::sdfRatio(std::vector<Pose3DPtr>& resultsS, const double& th)
+{
+    double thresholdlen = th;
+
+    int numPoints = downsample_scene_dense_refinement.rows;
+    // sdf, inside is +, outside is -
+#ifdef _OPENMP
+#pragma omp parallel for 
+#endif
+    for (int i = 0; i < resultsS.size(); i++) {
+        Eigen::VectorXi verts_sdf_overlap = MatrixXi::Zero(numPoints, 1);
+        // transpose freespace
+        Mat surfaceMoved = transformPCPose(downsample_scene_dense_refinement, resultsS[i]->pose.inv());
+
+        for (int k = 0; k < numPoints; ++k)
+        {
+            float* sample = surfaceMoved.ptr<float>(k);
+            double d = sdf_ptr->interpolate(0, { sample[0], sample[1], sample[2] });
+            if (d == std::numeric_limits<double>::max()) { continue; }
+            //if (d > thresholdlen) { verts_sdf_beyond(k) = 1; }
+            if (abs(d) <= thresholdlen) { verts_sdf_overlap(k) = 1; }
+        }
+        double Overlap = verts_sdf_overlap.sum() ;
+        resultsS[i]->updateOverlap(Overlap);
+    }
+}
+
+/*
 void  PPF3DDetector::SparseICP(std::vector<Pose3DPtr>& resultsS, Mat& srcPC, Mat&dstPC, const int ICP_nbIterations)
 {
 
@@ -665,29 +878,29 @@ void  PPF3DDetector::SparseICP(std::vector<Pose3DPtr>& resultsS, Mat& srcPC, Mat
 
     }
 }
-
+*/
 bool PPF3DDetector::matchPose(const Pose3D& sourcePose, const Pose3D& targetPose)
 {
   // translational difference
   Vec3d dv = targetPose.t - sourcePose.t; 
   double dNorm = cv::norm(dv);
 
-  //const double phi = fabs ( sourcePose.angle - targetPose.angle ); // 有问题
+  const double phi = fabs ( sourcePose.angle - targetPose.angle ); // 有问题
 
-  Eigen::Matrix<double, 4, 4> sMatrix; 
-  cv::cv2eigen(sourcePose.pose, sMatrix); // cv::Mat 转换成 Eigen::Matrix
-  Eigen::Affine3f sPose;
-  sPose.matrix() = sMatrix.cast<float>();
+  //Eigen::Matrix<double, 4, 4> sMatrix; 
+  //cv::cv2eigen(sourcePose.pose, sMatrix); // cv::Mat 转换成 Eigen::Matrix
+  //Eigen::Affine3f sPose;
+  //sPose.matrix() = sMatrix.cast<float>();
 
-  Eigen::Matrix<double, 4, 4> tMatrix;
-  cv::cv2eigen(targetPose.pose, tMatrix); // cv::Mat 转换成 Eigen::Matrix
-  Eigen::Affine3f tPose;
-  tPose.matrix() = tMatrix.cast<float>();
+  //Eigen::Matrix<double, 4, 4> tMatrix;
+  //cv::cv2eigen(targetPose.pose, tMatrix); // cv::Mat 转换成 Eigen::Matrix
+  //Eigen::Affine3f tPose;
+  //tPose.matrix() = tMatrix.cast<float>();
 
-  Eigen::Matrix3f RtRsInv(sPose.rotation().inverse().lazyProduct(tPose.rotation()).eval());
-  Eigen::AngleAxisf rotation_diff_mat(RtRsInv); //tr(Rs.inv * Rt) = tr(Rt * Rs.inv)
-  const double phi = std::abs(rotation_diff_mat.angle());
-  
+  //Eigen::Matrix3f RtRsInv(sPose.rotation().inverse().lazyProduct(tPose.rotation()).eval());
+  //Eigen::AngleAxisf rotation_diff_mat(RtRsInv); //tr(Rs.inv * Rt) = tr(Rt * Rs.inv)
+  //const double phi = std::abs(rotation_diff_mat.angle());
+  //
   bool clustering = (phi < this->rotation_threshold && dNorm < this->position_threshold);
   //if (clustering) {
   //    std::cout << "phi   " << phi << " rot-thshd " << this->rotation_threshold << " 小于阈值吗：" << (phi < this->rotation_threshold) << std::endl;
@@ -832,20 +1045,144 @@ void PPF3DDetector::clusterPoses(std::vector<Pose3DPtr>& poseList, int numPoses,
   poseClusters.clear();
 }
 
+bool PPF3DDetector::matchPoseInR3(const Pose3D& sourcePose, const Pose3D& targetPose)
+{
+    Mat tpl_s = transformPCPose(model_triplet, sourcePose.pose);
+    Mat tpl_t = transformPCPose(model_triplet, targetPose.pose);
+    double th = clusterThreshold * model_diameter;
+    bool clustering  = true;
+    for (int ii = 0; ii < tpl_s.rows; ii++)
+    {
+        Vec3f v1(tpl_s.ptr<float>(ii));
+        //const Vec3f n1(pct_gt.ptr<float>(ii) + 3);
+        Vec3f v2(tpl_t.ptr<float>(ii));
+        v1 = v1 - v2;
+        if (cv::norm(v1) > th) {
+            clustering = false;
+        }
+    }
+    return clustering;
+}
+
+
+void PPF3DDetector::clusterPosesInR3(std::vector<Pose3DPtr>& poseList, int numPoses, std::vector<Pose3DPtr>& finalPoses)
+{
+    std::vector<PoseCluster3DPtr> poseClusters;
+
+    finalPoses.clear();
+
+    vector<Mat> tripletTransformed(numPoses);
+
+#if defined _OPENMP
+#pragma omp parallel for
+#endif
+    for (int i = 0; i < numPoses; i++) {
+        tripletTransformed[i] = transformPCPose(model_triplet, poseList[i]->pose);
+    }
+
+
+    for (int i = 0; i < numPoses; i++)
+    {
+        Pose3DPtr pose = poseList[i];
+        bool assigned = false;
+
+        // search all clusters
+        for (size_t j = 0; j < poseClusters.size() && !assigned; j++)
+        {
+            const Pose3DPtr poseCenter = poseClusters[j]->poseList[0];
+            if (matchPoseInR3(*pose, *poseCenter))
+            {
+                poseClusters[j]->addPose(pose);
+                assigned = true;
+            }
+        }
+
+        if (!assigned)
+        {
+            poseClusters.push_back(PoseCluster3DPtr(new PoseCluster3D(pose)));
+        }
+    }
+
+    // sort the clusters so that we could output multiple hypothesis
+    std::sort(poseClusters.begin(), poseClusters.end(), sortPoseClusters);
+
+    finalPoses.resize(poseClusters.size());
+
+    // TODO: Use MinMatchScore
+
+
+#if defined _OPENMP
+#pragma omp parallel for
+#endif
+    for (int i = 0; i < static_cast<int>(poseClusters.size()); i++)
+    {
+        // We could only average the quaternions. So I will make use of them here
+        Vec4d qAvg = Vec4d::all(0);
+        Vec3d tAvg = Vec3d::all(0);
+
+        // Perform the final averaging
+        PoseCluster3DPtr curCluster = poseClusters[i];
+        std::vector<Pose3DPtr> curPoses = curCluster->poseList;
+        const int curSize = (int)curPoses.size();
+
+        //debug
+        //if (curSize > 1) {
+        //    std::cout << "cluster " << i << std::endl;
+        //    for (Pose3DPtr Pose : curPoses) {
+        //        std::cout << Pose->pose << std::endl;
+        //    }
+        //}
+
+        for (int j = 0; j < curSize; j++)
+        {
+            qAvg += curPoses[j]->q;
+            tAvg += curPoses[j]->t;
+        }
+
+        tAvg *= 1.0 / curSize;
+        qAvg *= 1.0 / curSize;
+        // normalize quantonion
+        const double qNorm = cv::norm(qAvg);
+        if (qNorm > EPS)
+        {
+            qAvg *= 1.0 / qNorm;
+        }
+
+        curPoses[0]->updatePoseQuat(qAvg, tAvg);
+        curPoses[0]->numVotes = curCluster->numVotes;
+
+        //debug
+        //if (curSize > 1) {
+        //    std::cout << "cluster center:" << std::endl;
+        //    std::cout << curPoses[0]->pose << std::endl;
+        //    std::cout << std::endl;
+        //}
+
+
+        finalPoses[i] = curPoses[0]->clone();
+    }
+
+    poseClusters.clear();
+}
+
 //https://zhuanlan.zhihu.com/p/78504109
 //https://blog.csdn.net/m0_45388819/article/details/117217322
 //https://blog.csdn.net/qq_31638535/article/details/143980041
-void PPF3DDetector::NMS(std::vector<Pose3DPtr>& poseList, double Threshold, std::vector<Pose3DPtr>& finalPoses)
+void PPF3DDetector::NMScenter(std::vector<Pose3DPtr>& poseList, double Threshold, std::vector<Pose3DPtr>& finalPoses)
 {
     finalPoses.clear();
 
-    
     int i, j;
     int numInputPose = poseList.size();
     vector<bool> is_suppressed(numInputPose);
     //vector<map<string, Vec2f> > bboxList(numInputPose);
     //vector<float> bboxVolumes(numInputPose);
     vector<Mat> centerTransformed(numInputPose);
+
+#if defined _OPENMP
+#pragma omp parallel for
+#endif
+
     for (i = 0; i < numInputPose; i++) {
         is_suppressed[i] = 0;
 
@@ -869,6 +1206,7 @@ void PPF3DDetector::NMS(std::vector<Pose3DPtr>& poseList, double Threshold, std:
     }
 
     double th = Threshold * model_diameter;
+    //double th = Threshold * model_minimum_length;
 
     for (i = 0; i < numInputPose; i++)                // 循环所有窗口   
     {
@@ -889,7 +1227,7 @@ void PPF3DDetector::NMS(std::vector<Pose3DPtr>& poseList, double Threshold, std:
                     double centerDistance = cv::norm(centerCurrent.row(0) - centerKeeped.row(0));
                     if (centerDistance < th) //0.5
                     {
-                        is_suppressed[j] = 1;           // 将窗口j标记为抑制   
+                        is_suppressed[j] = 1;           // 将窗口j标记为抑制  
                     }
 
                     //map<string, Vec2f>& bboxCurrent= bboxList[j];
@@ -910,6 +1248,107 @@ void PPF3DDetector::NMS(std::vector<Pose3DPtr>& poseList, double Threshold, std:
                     //    }
                     //}
                 }
+            }
+        }
+    }
+
+    for (i = 0; i < numInputPose; i++)                  // 遍历所有输入窗口   
+    {
+        if (!is_suppressed[i])             // 将未发生抑制的窗口信息保存到输出信息中   
+        {
+            finalPoses.push_back(poseList[i]->clone()); //clone overlap
+        }
+    }
+
+}
+
+//void avg_quaternion_markley(Eigen::Vector4f& qs_avg, std::vector< Eigen::Vector4f> qs) {
+void PPF3DDetector::avg_quaternion_markley(Vec4d& qs_avg_cv, std::vector< Vec4d> qs_cv) {
+
+
+    Eigen::Matrix4d A = Eigen::Matrix4d::Zero();
+    int M = qs_cv.size();
+    for (int i = 0; i < M; i++) {
+        //Eigen::Vector4f qs_temp = qs[i];
+        Eigen::Vector4d qs_temp;
+        cv::cv2eigen(qs_cv[i], qs_temp);
+        A = qs_temp * qs_temp.transpose() + A;
+    }
+    A = ((float)1.0 / (float)M) * A;
+
+    Eigen::EigenSolver<Eigen::Matrix4d> es(A);
+    Eigen::MatrixXcd evecs = es.eigenvectors();//获取矩阵特征向量4*4，这里定义的MatrixXcd必须有c，表示获得的是complex复数矩阵
+    Eigen::MatrixXcd evals = es.eigenvalues();//获取矩阵特征值 4*1
+    Eigen::MatrixXd evalsReal;//注意这里定义的MatrixXd里没有c
+    evalsReal = evals.real();//获取特征值实数部分
+    Eigen::MatrixXd::Index evalsMax;
+    evalsReal.rowwise().sum().maxCoeff(&evalsMax);//得到最大特征值的位置
+    Eigen::Vector4d q;
+    q << evecs.real()(0, evalsMax), evecs.real()(1, evalsMax), evecs.real()(2, evalsMax), evecs.real()(3, evalsMax);//得到对应特征向量
+    Eigen::Vector4d qs_avg = q;
+    cv::eigen2cv(qs_avg, qs_avg_cv);
+
+}
+
+void PPF3DDetector::NMSbbox(std::vector<Pose3DPtr>& poseList, double Threshold, std::vector<Pose3DPtr>& finalPoses)
+{
+    finalPoses.clear();
+
+    int i, j;
+    int numInputPose = poseList.size();
+    vector<bool> is_suppressed(numInputPose);
+    vector<Mat> bboxTransformed(numInputPose);
+
+#if defined _OPENMP
+#pragma omp parallel for
+#endif
+    for (i = 0; i < numInputPose; i++) {
+        is_suppressed[i] = 0;
+        bboxTransformed[i] = transformPCPose(model_bbox, poseList[i]->pose);
+    }
+
+    double th = Threshold * model_diameter;
+
+    for (i = 0; i < numInputPose; i++)                // 循环所有窗口   
+    {
+        if (!is_suppressed[i])           // 判断窗口是否被抑制   
+        {
+
+            Mat& bboxKeeped = bboxTransformed[i];
+            poseList[i]->cluster_count = 1;
+            poseList[i]->qs.push_back(poseList[i]->q);
+
+            for (j = i + 1; j < numInputPose; j++)
+            {
+                if (!is_suppressed[j])   // 判断窗口是否被抑制   
+                {
+                    Mat& bboxCurrent = bboxTransformed[j];
+
+                    //double totalD_ADD = 0;
+                    double max_d = 0;
+                    for (int ii = 0; ii < bboxKeeped.rows; ii++)
+                    {
+                        Vec3f v1(bboxKeeped.ptr<float>(ii));
+                        //const Vec3f n1(pct_gt.ptr<float>(ii) + 3);
+                        Vec3f v2(bboxCurrent.ptr<float>(ii));
+                        v1 = v1 - v2;
+                        double tmp_d = cv::norm(v1);
+                        if (tmp_d > max_d) max_d = tmp_d;
+                        //totalD_ADD += cv::norm(v1);
+                    }
+                    //totalD_ADD /= bboxKeeped.rows;
+
+                    if (max_d < th) //0.5
+                    {
+                        is_suppressed[j] = 1;           // 将窗口j标记为抑制  
+                        poseList[i]->numVotes += poseList[j]->numVotes;
+                        //poseList[i]->q += poseList[j]->q;
+                        poseList[i]->t += poseList[j]->t;
+                        poseList[i]->cluster_count += 1;
+                        poseList[i]->qs.push_back(poseList[j]->q);
+                    }
+
+                }
 
             }
         }
@@ -919,6 +1358,18 @@ void PPF3DDetector::NMS(std::vector<Pose3DPtr>& poseList, double Threshold, std:
     {
         if (!is_suppressed[i])             // 将未发生抑制的窗口信息保存到输出信息中   
         {
+            poseList[i]->t *= 1.0 / poseList[i]->cluster_count;
+            //poseList[i]->q *= 1.0 / poseList[i]->cluster_count;
+            //// normalize quantonion
+            //const double qNorm = cv::norm(poseList[i]->q);
+            //if (qNorm > EPS)
+            //{
+            //    poseList[i]->q *= 1.0 / qNorm;
+            //}
+            Vec4d qs_avg;
+            avg_quaternion_markley(qs_avg, poseList[i]->qs);
+            poseList[i]->q = qs_avg;
+
             finalPoses.push_back(poseList[i]->clone()); //clone overlap
         }
     }
@@ -1008,6 +1459,72 @@ void PPF3DDetector::NMS(std::vector<Pose3DPtr>& poseList, double Threshold, std:
 //    return LATENT_SVM_OK;
 //}
 
+Mat PPF3DDetector::SubtractPlane(const Mat& scenePC, float dist) {
+    // convert cv mat to pcl 
+    pcl::PointCloud<pcl::PointNormal>::Ptr cloud_pn(new pcl::PointCloud<pcl::PointNormal>());
+
+    cloud_pn->resize(scenePC.rows);
+//#if defined _OPENMP
+//#pragma omp parallel for
+//#endif
+    for (int k = 0; k < scenePC.rows; k++)
+    {
+        const float* data = scenePC.ptr<float>(k);
+        pcl::PointNormal pt;
+        pt.x = data[0];
+        pt.y = data[1];
+        pt.z = data[2];
+        pt.normal_x = data[3];
+        pt.normal_y = data[4];
+        pt.normal_z = data[5];
+        cloud_pn->at(k) = pt;
+    }
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::copyPointCloud(*cloud_pn, *cloud_in);
+
+    pcl::SACSegmentation<pcl::PointXYZ> seg(true);
+    seg.setOptimizeCoefficients(true);
+    seg.setModelType(pcl::SACMODEL_PLANE);
+    seg.setMethodType(pcl::SAC_RANSAC); //SAC_RANSAC
+    seg.setMaxIterations(1000);
+    seg.setDistanceThreshold(dist);
+
+    pcl::ExtractIndices<pcl::PointNormal> extract;
+
+    pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
+    pcl::ModelCoefficients coeff;
+
+    pcl::PointCloud<pcl::PointNormal>::Ptr plane(new pcl::PointCloud<pcl::PointNormal>);
+    pcl::PointCloud<pcl::PointNormal>::Ptr keeped(new pcl::PointCloud<pcl::PointNormal>);
+    seg.setInputCloud(cloud_in);
+    seg.segment(*inliers, coeff);
+
+    extract.setInputCloud(cloud_pn);
+    extract.setIndices(inliers);
+    //extract.setNegative(false);
+    //extract.filter(*plane);
+    extract.setNegative(true);
+    extract.filter(*keeped);
+
+    cv::Mat keeped_cv = cv::Mat(keeped->size(), 6, CV_32FC1);
+//#if defined _OPENMP
+//#pragma omp parallel for
+//#endif
+    for (int i = 0; i < keeped->size(); i++)
+    {
+        float* data = keeped_cv.ptr<float>(i);
+        data[0] = keeped->at(i).x;
+        data[1] = keeped->at(i).y;
+        data[2] = keeped->at(i).z;
+        data[3] = keeped->at(i).normal_x;
+        data[4] = keeped->at(i).normal_y;
+        data[5] = keeped->at(i).normal_z;
+    }
+
+    return keeped_cv;
+}
+
 void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const double relativeSceneSampleStep, const double relativeSceneDistance)
 {
   if (!trained)
@@ -1023,6 +1540,7 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   //int numNeighbors = 10;
   int numAngles = (int) (floor (2 * M_PI / angle_step));
   float distanceStep = (float)distance_step;
+  //float distanceStepFeature = (float)(model_diameter * distance_step_relative);
   uint n = num_ref_points;
   std::vector<Pose3DPtr> poseList;
   int sceneSamplingStep = scene_sample_step;
@@ -1040,50 +1558,65 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   //Mat sampled = samplePCByQuantization(pc, xRange, yRange, zRange, (float)relativeSceneDistance, 0);
 
   float distanceSampleStep = relativeSceneDistance * model_diameter;
-  float distanceSampleStepRefine = distanceSampleStep / 2;
-  Mat sampled, sampledDenseRefinement;
+  float distanceSampleStepRefine = distanceSampleStep / 4;
+  Mat sampled, sampled_for_freespace, sampledDenseRefinement, sampledSparseRefinement, pcRemained;
+  sampled_for_freespace = samplePCByQuantization_cube(pc, xRange, yRange, zRange, distanceSampleStep, 0);
+  sampledDenseRefinement = samplePCUniform(pc, 2);
+  //sampledSparseRefinement = samplePCUniform(pc, 4);
+  //sampledSparseRefinement = samplePCByQuantization_cube(pc, xRange, yRange, zRange, distanceSampleStepRefine, 0);
+
+  pcRemained = SubtractPlane(pc, distanceSampleStep * 4);
   if (samplingMethod == "cube") {
-      sampled = samplePCByQuantization_cube(pc, xRange, yRange, zRange, distanceSampleStep, 0);
-      sampledDenseRefinement = samplePCByQuantization_cube(pc, xRange, yRange, zRange, distanceSampleStepRefine, 0);
+      //sampled = samplePCByQuantization_cube(pc, xRange, yRange, zRange, distanceSampleStep, 0);
+      sampled = samplePCByQuantization_cube(pcRemained, xRange, yRange, zRange, distanceSampleStep, 0);
   }
   else if (samplingMethod == "normal") {
-      sampled = samplePCByQuantization_normal(pc, xRange, yRange, zRange, distanceSampleStep, 15.0 / 180 * M_PI, 3);
-      sampledDenseRefinement = samplePCByQuantization_normal(pc, xRange, yRange, zRange, distanceSampleStepRefine, 15.0 / 180 * M_PI, 3);
+      //sampled = samplePCByQuantization_normal(pc, xRange, yRange, zRange, distanceSampleStep, 15.0 / 180 * M_PI, 3);
+      sampled = samplePCByQuantization_normal(pcRemained, xRange, yRange, zRange, distanceSampleStep, 15.0 / 180 * M_PI, 3);
   }
+  //writePLY(sampled, "sampled_scene.ply");
 
   //Mat sampledDenseRefinement= samplePCUniform(pc, 8);
   relative_scene_distance = relativeSceneDistance;
+  //downsample_scene_sparse_refinement = sampled;
+  //downsample_scene_sparse_refinement_flannIndex = indexPCFlann(downsample_scene_sparse_refinement);
   downsample_scene_dense_refinement = sampledDenseRefinement;
-  downsample_scene = sampled;
-  downsample_scene_flannIndex = indexPCFlann(downsample_scene);
   downsample_scene_dense_refinement_flannIndex = indexPCFlann(downsample_scene_dense_refinement);
-  generateFreeSpaceVolume(distanceSampleStep);
+  
+  if(useFreeSpaceConstraint) generateFreeSpaceVolume(sampled_for_freespace, (float)distance_step);  // set downsample_scene_freespace
 
   // 将参考点或者说关键点、采样的场景点云存下来，用来debug
-  Mat sampled_ref0 = Mat((sampled.rows / sceneSamplingStep) + 1, pc.cols, CV_32F);
-  int c = 0;
-  for (int i = 0; i < sampled.rows ; i += sceneSamplingStep)
-  {
-      sampled.row(i).copyTo(sampled_ref0.row(c));
-      c += 1;
-  }
-  Mat sampled_ref;
-  sampled_ref0.rowRange(0, c).copyTo(sampled_ref); 
-  int refPointNum = c;
   if (debug) {
+      Mat sampled_ref0 = Mat((sampled.rows / sceneSamplingStep) + 1, pc.cols, CV_32F);
+      int c = 0;
+      for (int i = 0; i < sampled.rows; i += sceneSamplingStep)
+      {
+          sampled.row(i).copyTo(sampled_ref0.row(c));
+          c += 1;
+      }
+      Mat sampled_ref;
+      sampled_ref0.rowRange(0, c).copyTo(sampled_ref);
+      int refPointNum = c;
+
       std::cout << "参考点数：" << refPointNum << std::endl;
       string name1 = "../samples/data/results/" + debug_folder_name + "/sampled_scene.ply";
       string name2 = "../samples/data/results/" + debug_folder_name + "/sampled_scene_ref.ply";
+      string name3 = "../samples/data/results/" + debug_folder_name + "/pcRemained.ply";
+      string name4 = "../samples/data/results/" + debug_folder_name + "/sampled_scene_dense.ply";
+      string name5 = "../samples/data/results/" + debug_folder_name + "/sampled_scene_sparse.ply";
       writePLY(sampled, name1.c_str());
       writePLY(sampled_ref, name2.c_str());
+      writePLY(pcRemained, name3.c_str()); 
+      writePLY(sampledDenseRefinement, name4.c_str());
+      //writePLY(sampledSparseRefinement, name5.c_str());
   }
 
   // radius tree
-  //Mat dest_32f;
-  //sampled.colRange(0, 3).copyTo(dest_32f);
-  //cv::flann::Index downsampleSceneRadiusTree(dest_32f, cv::flann::KDTreeIndexParams(1));
-  //unsigned int max_neighbours = num_ref_points * 2;
-  //double model_max_dist = model_diameter * model_diameter;
+  Mat dest_32f;
+  sampled.colRange(0, 3).copyTo(dest_32f);
+  cv::flann::Index downsampleSceneRadiusTree(dest_32f, cv::flann::KDTreeIndexParams(1));
+  unsigned int max_neighbours = num_ref_points * 2;
+  double model_max_dist = model_diameter * model_diameter;
 
   // 创建一个列表，用来存预测的位姿，这些位姿被算法认为是Positive的
   poseList.reserve((sampled.rows / sceneSamplingStep) +4);
@@ -1112,10 +1645,10 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
     vector<Mat> coordAccumulator;
     if (debug) coordAccumulator.resize(numAngles * n);
 
-    //std::vector<float> vecQuery{ p1[0], p1[1], p1[2] };
-    //std::vector<int> vecIndex;
-    //std::vector<float> vecDist;
-    //downsampleSceneRadiusTree.radiusSearch(vecQuery, vecIndex, vecDist, model_max_dist, max_neighbours, cv::flann::SearchParams(max_neighbours));
+    std::vector<float> vecQuery{ p1[0], p1[1], p1[2] };
+    std::vector<int> vecIndex;
+    std::vector<float> vecDist;
+    downsampleSceneRadiusTree.radiusSearch(vecQuery, vecIndex, vecDist, model_max_dist, max_neighbours, cv::flann::SearchParams(max_neighbours));
 
     // Tolga Birdal's notice:
     // As a later update, we might want to look into a local neighborhood only
@@ -1123,25 +1656,25 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
     // and collect the neighbors to compute the relative pose
 
     // 遍历所有的场景点si
-    for (int j = 0; j < sampled.rows; j ++)
-    {
-      if (i!=j)
-      {
-        // 对于一个si，它和sr构成点对
-        const Vec3f p2(sampled.ptr<float>(j));
-        const Vec3f n2(sampled.ptr<float>(j) + 3);
-
-    //for (int j = 1; j < vecIndex.size(); j++)
+    //for (int j = 0; j < sampled.rows; j ++)
     //{
-    //  int pInd = vecIndex[j];
-    //  if ((pInd == 0) && (vecIndex[j - 1] == 0))
+    //  if (i!=j)
     //  {
-    //        break;
-    //  }
-    //  if (i != pInd)
-    //  {
-    //    const Vec3f p2(sampled.ptr<float>(pInd));
-    //    const Vec3f n2(sampled.ptr<float>(pInd) + 3);
+    //    // 对于一个si，它和sr构成点对
+    //    const Vec3f p2(sampled.ptr<float>(j));
+    //    const Vec3f n2(sampled.ptr<float>(j) + 3);
+
+    for (int j = 1; j < vecIndex.size(); j++)
+    {
+      int pInd = vecIndex[j];
+      if ((pInd == 0) && (vecIndex[j - 1] == 0))
+      {
+            break;
+      }
+      if (i != pInd)
+      {
+        const Vec3f p2(sampled.ptr<float>(pInd));
+        const Vec3f n2(sampled.ptr<float>(pInd) + 3);
 
         // 计算 F(sr, si)，离散化之后计算哈希值
         Vec4d f1_4 = Vec4d::all(0);
@@ -1263,20 +1796,22 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
             accumulator[accIndex]++;
 
             // saveVoters
-            if (debug) {
-                Mat corres = (cv::Mat_<int>(1, 3) << j, ppfInd, corrI);
-                coordAccumulator[accIndex].push_back(corres);
+            //if (debug) {
+            //    Mat corres = (cv::Mat_<int>(1, 3) << j, ppfInd, corrI);
+            //    coordAccumulator[accIndex].push_back(corres);
 
-            }
+            //}
             
             node = node->next;
         }
       }
     }
 
+     
     // the paper says: "For stability reasons, all peaks that received a certain amount
     // of votes relative to the maximum peak are used." No specific value is mentioned,
     // but 90% seems good
+
     for (uint k = 0; k < n; k++)
     {
         for (int j = 0; j < numAngles; j++)
@@ -1289,112 +1824,276 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
     }
 
     // visualize accumulator
-    Mat accum = cv::Mat(numAngles * n, 1, CV_8U, accumulator) * (255./maxVotes);
-    cv::Mat result1 = accum.reshape(0, n);
+    //Mat accum = cv::Mat(numAngles * n, 1, CV_8U, accumulator) * (255./maxVotes);
+    //cv::Mat result1 = accum.reshape(0, n);
+    //if (maxVotes < 50) continue;
+    //if (maxVotes < 1) {
+    /*if (0) {
+        const uint accVal = 0;
+        refIndMax = 0;
+        alphaIndMax = 0;
 
-    maxVotes *= 0.9;
+        // invert Tsg : Luckily rotation is orthogonal: Inverse = Transpose.
+        // We are not required to invert.
+        Vec3d tInv, tmg;
+        Matx33d Rmg;
+        RInv = Rsg.t();
+        tInv = -RInv * tsg;
+
+        Matx44d TsgInv;
+        rtToPose(RInv, tInv, TsgInv);
+
+        // TODO : Compute pose
+        const Vec3f pMax(sampled_pc.ptr<float>(refIndMax));
+        const Vec3f nMax(sampled_pc.ptr<float>(refIndMax) + 3);
+
+        computeTransformRT(pMax, nMax, Rmg, tmg);
+
+        Matx44d Tmg;
+        rtToPose(Rmg, tmg, Tmg);
+
+        // convert alpha_index to alpha
+        int alpha_index = alphaIndMax;
+        double alpha = (alpha_index * (4 * M_PI)) / numAngles - 2 * M_PI;
+
+        // Equation 2:
+        Matx44d Talpha;
+        Matx33d R;
+        Vec3d t = Vec3d::all(0);
+        getUnitXRotation(alpha, R);
+        rtToPose(R, t, Talpha);
+
+        Matx44d rawPose = TsgInv * (Talpha * Tmg);
+
+        Pose3DPtr pose(new Pose3D(alpha, refIndMax, accVal));  //modelIndex
+        pose->updatePose(rawPose);
+
+        #if defined (_OPENMP)
+        #pragma omp critical
+        #endif
+        {
+            poseList.push_back(pose);
+        }
+        free(accumulator);
+        continue;
+    } */
+
+    float vote_th = maxVotes * 0.95;
+    for (uint k = 0; k < n; k++)
+    {
+        for (int j = 0; j < numAngles; j++)
+        {
+            const uint accInd = k * numAngles + j;
+            const uint accVal = accumulator[accInd];
+            if (accVal >= vote_th)
+            {
+                refIndMax = k;
+                alphaIndMax = j;
+
+                // invert Tsg : Luckily rotation is orthogonal: Inverse = Transpose.
+                // We are not required to invert.
+                Vec3d tInv, tmg;
+                Matx33d Rmg;
+                RInv = Rsg.t();
+                tInv = -RInv * tsg;
+
+                Matx44d TsgInv;
+                rtToPose(RInv, tInv, TsgInv);
+
+                // TODO : Compute pose
+                const Vec3f pMax(sampled_pc.ptr<float>(refIndMax));
+                const Vec3f nMax(sampled_pc.ptr<float>(refIndMax) + 3);
+
+                computeTransformRT(pMax, nMax, Rmg, tmg);
+
+                Matx44d Tmg;
+                rtToPose(Rmg, tmg, Tmg);
+
+                // convert alpha_index to alpha
+                int alpha_index = alphaIndMax;
+                double alpha = (alpha_index * (4 * M_PI)) / numAngles - 2 * M_PI;
+
+                // Equation 2:
+                Matx44d Talpha;
+                Matx33d R;
+                Vec3d t = Vec3d::all(0);
+                getUnitXRotation(alpha, R);
+                rtToPose(R, t, Talpha);
+
+                Matx44d rawPose = TsgInv * (Talpha * Tmg);
+
+                Pose3DPtr pose(new Pose3D(alpha, refIndMax, accVal));  //modelIndex
+                pose->updatePose(rawPose);
+
+                // compute coordinates of the voters
+                // i scene  j scene  i model j model
+                //if (debug) {
+                //    Mat voted = coordAccumulator[accInd];
+                //    Mat modelI = voted.col(2);
+                //    Mat modelJ = voted.col(1) - modelI * n;
+                //    Mat sceneJ = voted.col(0);
+                //    Mat votes = Mat(voted.rows * 2 + 2, 6, CV_32F);
+                //    sampled.row(i).copyTo(votes.row(0)); // si
+                //    sampled_pc.row(refIndMax).copyTo(votes.row(1)); //mi
+                //    int sj, mj;
+                //    for (int ri = 0; ri < voted.rows; ri++) {
+                //        sj = sceneJ.at<int>(ri);
+                //        sampled.row(sj).copyTo(votes.row(2 + ri));
+                //        mj = modelJ.at<int>(ri);
+                //        sampled_pc.row(mj).copyTo(votes.row(2 + voted.rows + ri));
+                //    }
+                //    pose->addVoter(votes);
+                //}
+
+                #if defined (_OPENMP)
+                #pragma omp critical
+                #endif
+                {
+                    poseList.push_back(pose);
+                }
+            }
+        }
+    }
+    free(accumulator);
+
+/*
+    // Maximize the accumulator
     for (uint k = 0; k < n; k++)
     {
       for (int j = 0; j < numAngles; j++)
       {
         const uint accInd = k*numAngles + j;
         const uint accVal = accumulator[ accInd ];
-        if (accVal >= maxVotes)
+        if (accVal > maxVotes)
         {
+          maxVotes = accVal;
           refIndMax = k;
           alphaIndMax = j;
-
-            // invert Tsg : Luckily rotation is orthogonal: Inverse = Transpose.
-            // We are not required to invert.
-            Vec3d tInv, tmg;
-            Matx33d Rmg;
-            RInv = Rsg.t();
-            tInv = -RInv * tsg;
-
-            Matx44d TsgInv;
-            rtToPose(RInv, tInv, TsgInv);
-
-            // TODO : Compute pose
-            const Vec3f pMax(sampled_pc.ptr<float>(refIndMax));
-            const Vec3f nMax(sampled_pc.ptr<float>(refIndMax) + 3);
-
-            computeTransformRT(pMax, nMax, Rmg, tmg);
-
-            Matx44d Tmg;
-            rtToPose(Rmg, tmg, Tmg);
-
-            // convert alpha_index to alpha
-            int alpha_index = alphaIndMax;
-            double alpha = (alpha_index*(4*M_PI))/numAngles-2*M_PI;
-
-            // Equation 2:
-            Matx44d Talpha;
-            Matx33d R;
-            Vec3d t = Vec3d::all(0);
-            getUnitXRotation(alpha, R);
-            rtToPose(R, t, Talpha);
-
-            Matx44d rawPose = TsgInv * (Talpha * Tmg);
-
-            Pose3DPtr pose(new Pose3D(alpha, refIndMax, accVal));  //modelIndex
-            pose->updatePose(rawPose);
-
-            // compute coordinates of the voters
-            // i scene  j scene  i model j model
-            if (debug) {
-                Mat voted = coordAccumulator[accInd];
-                Mat modelI = voted.col(2);
-                Mat modelJ = voted.col(1) - modelI * n;
-                Mat sceneJ = voted.col(0);
-                Mat votes = Mat(voted.rows * 2 + 2, 6, CV_32F);
-                sampled.row(i).copyTo(votes.row(0)); // si
-                sampled_pc.row(refIndMax).copyTo(votes.row(1)); //mi
-                int sj, mj;
-                for (int ri = 0; ri < voted.rows; ri++) {
-                    sj = sceneJ.at<int>(ri);
-                    sampled.row(sj).copyTo(votes.row(2 + ri));
-                    mj = modelJ.at<int>(ri);
-                    sampled_pc.row(mj).copyTo(votes.row(2 + voted.rows + ri));
-                }
-                pose->addVoter(votes);
-            }
-
-            #if defined (_OPENMP)
-            #pragma omp critical
-            #endif
-            {
-              poseList.push_back(pose);
-            }
         }
+
+#if !defined (_OPENMP)
+        accumulator[accInd ] = 0;
+#endif
       }
     }
-    free(accumulator);
+
+    // invert Tsg : Luckily rotation is orthogonal: Inverse = Transpose.
+    // We are not required to invert.
+    Vec3d tInv, tmg;
+    Matx33d Rmg;
+    RInv = Rsg.t();
+    tInv = -RInv * tsg;
+
+    Matx44d TsgInv;
+    rtToPose(RInv, tInv, TsgInv);
+
+    // TODO : Compute pose
+    const Vec3f pMax(sampled_pc.ptr<float>(refIndMax));
+    const Vec3f nMax(sampled_pc.ptr<float>(refIndMax) + 3);
+
+    computeTransformRT(pMax, nMax, Rmg, tmg);
+
+    Matx44d Tmg;
+    rtToPose(Rmg, tmg, Tmg);
+
+    // convert alpha_index to alpha
+    int alpha_index = alphaIndMax;
+    double alpha = (alpha_index*(4*M_PI))/numAngles-2*M_PI;
+
+    // Equation 2:
+    Matx44d Talpha;
+    Matx33d R;
+    Vec3d t = Vec3d::all(0);
+    getUnitXRotation(alpha, R);
+    rtToPose(R, t, Talpha);
+
+    Matx44d rawPose = TsgInv * (Talpha * Tmg);
+
+    Pose3DPtr pose(new Pose3D(alpha, refIndMax, maxVotes));
+    pose->updatePose(rawPose);
+    #if defined (_OPENMP)
+    #pragma omp critical
+    #endif
+    {
+      poseList.push_back(pose);
+    }
+
+    free(accumulator);*/
   }
 
   // TODO : Make the parameters relative if not arguments.
   //double MinMatchScore = 0.5;
 
-  //int numPosesAdded = poseList.size();
+  int numPosesAdded = poseList.size();
+  if (1) {
+      std::sort(poseList.begin(), poseList.end(), pose3DPtrCompare); // 将clusterPoses中对poseList的排序放到这里
+      //if (debug) debugPose(poseList, "numVotes", "afterHoughVot", true); // false
+      results = poseList;
 
-  std::sort(poseList.begin(), poseList.end(), pose3DPtrCompare); // 将clusterPoses中对poseList的排序放到这里
-  if (debug) debugPose(poseList, "numVotes", "afterHoughVot", true);
-
-  //clusterPoses(poseList, numPosesAdded, results);
-  //if (debug) debugPose(results, "numVotes", "afterCluster", true);
-  results = poseList;
-
-  std::vector<Pose3DPtr> filterRes;
-  //std::vector<Pose3DPtr> smallRes;
-  //smallRes.assign(results.begin(), results.begin() + 150);
-  freespaceIntersectionCount(results, filterRes, 100); // 100
-  results = filterRes;
-  std::sort(results.begin(), results.end(), pose3DPtrCompare);
-  if (debug) debugPose(results, "numVotes", "afterFreespace", true);
+        //clusterPoses(poseList, numPosesAdded, results);
+        //if (debug) debugPose(results, "numVotes", "afterCluster", true);
+        //int postPoseNum = 10000;
+        //if (results.size() < postPoseNum) postPoseNum = results.size();
+        //vector<Pose3DPtr> resultsPost(results.begin(), results.begin() + postPoseNum);
+        //results = resultsPost;
+  }
 
 
-  overlapRatio(sampled_pc, downsample_scene, downsample_scene_flannIndex, results, model_diameter * 0.01, 25); //0.08 | relativeSceneDistance *0.8, 25
-  std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
-  if (debug) debugPose(results, "overlap", "afterOverlapRatio", true);
+
+  /*
+  if(0)
+  {
+      if (debug) debugPose(poseList, "numVotes", "afterHoughVot", true);
+      clusterPoses(poseList, std::min(2000, numPosesAdded), results);
+      if (debug) debugPose(results, "numVotes", "afterCluster", true);
+      //results = poseList;
+      
+      if (useFreeSpaceConstraint) {
+          std::vector<Pose3DPtr> filterRes;
+          //std::vector<Pose3DPtr> smallRes;
+          //smallRes.assign(results.begin(), results.begin() + 150);
+          freespaceIntersectionCount(results, filterRes, 5); // uwa 100
+          if (filterRes.size() > 0) results = filterRes;
+          std::sort(results.begin(), results.end(), pose3DPtrCompare);
+          if (debug) debugPose(results, "numVotes", "afterFreespace", true);
+      }
+
+      overlapRatio(sampled_pc, downsample_scene, downsample_scene_flannIndex, results, model_diameter * 0.05, 25); //uwa 0.01, 25
+      std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
+      if (debug) debugPose(results, "overlap", "afterOverlapRatio", true);
+
+  }*/
+
+  /*
+  if (0) {
+      std::sort(poseList.begin(), poseList.end(), pose3DPtrCompare);
+      std::vector<Pose3DPtr> finalPoses; NMScenter(poseList, nmsThreshold, finalPoses);
+      debugPose(finalPoses, "numVotes", "afterHoughVot", true);
+
+      clusterPoses(poseList, std::min(2000, numPosesAdded), results);
+      NMScenter(results, nmsThreshold, finalPoses);
+      debugPose(finalPoses, "numVotes", "afterCluster", true);
+      //results = poseList;
+
+      if (useFreeSpaceConstraint) {
+          std::vector<Pose3DPtr> filterRes;
+          //std::vector<Pose3DPtr> smallRes;
+          //smallRes.assign(results.begin(), results.begin() + 150);
+          freespaceIntersectionCount(results, filterRes, 5); // uwa 100
+          if (filterRes.size() > 0) results = filterRes;
+          std::sort(results.begin(), results.end(), pose3DPtrCompare);
+          NMScenter(results, nmsThreshold, finalPoses);
+          debugPose(finalPoses, "numVotes", "afterFreespace", true);
+      }
+
+
+      overlapRatio(sampled_pc, downsample_scene, downsample_scene_flannIndex, results, model_diameter * 0.05, 25); //uwa 0.01, 25
+      std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
+      NMScenter(results, nmsThreshold, finalPoses);
+      debugPose(finalPoses, "overlap", "afterOverlapRatio", true);
+  }*/
+
+
 
   //std::vector<Pose3DPtr> filterRes;
   //std::vector<Pose3DPtr> smallRes;
@@ -1456,10 +2155,10 @@ void PPF3DDetector::debugMatch(const Mat& pc, std::vector<Pose3DPtr>& results, c
     //Mat sampledDenseRefinement= samplePCUniform(pc, 8);
     relative_scene_distance = relativeSceneDistance;
 
-    downsample_scene_dense_refinement = sampledDenseRefinement;
-    downsample_scene = sampled;
-    downsample_scene_flannIndex = indexPCFlann(downsample_scene);
-    downsample_scene_dense_refinement_flannIndex = indexPCFlann(downsample_scene_dense_refinement);
+    //downsample_scene_dense_refinement = sampledDenseRefinement;
+    //downsample_scene = sampled;
+    //downsample_scene_flannIndex = indexPCFlann(downsample_scene);
+    //downsample_scene_dense_refinement_flannIndex = indexPCFlann(downsample_scene_dense_refinement);
 
     // allocate the accumulator : Moved this to the inside of the loop
     /*#if !defined (_OPENMP)
@@ -1647,21 +2346,34 @@ void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bo
     // nms for multi instances
     // 注意，这里截取了前100个位姿做NMS
     if (nmsEnabled) {
+    //if (0) {
         std::vector<Pose3DPtr> finalPoses;
         
-        int postPoseNum = 100;
-        if (results.size() < postPoseNum) postPoseNum = results.size();
-        vector<Pose3DPtr> resultsPost(results.begin(), results.begin() + postPoseNum);
-        NMS(resultsPost, nmsThreshold, finalPoses);
 
-        //NMS(results, nmsThreshold, finalPoses);
-
+        NMSbbox(results, nmsThreshold, finalPoses);
+        //NMScenter(results, nmsThreshold, finalPoses);
+        //std::sort(finalPoses.begin(), finalPoses.end(), pose3DPtrCompare);
+        //std::sort(finalPoses.begin(), finalPoses.end(), pose3DPtrCompareClusterCount);
+        //debugPose(finalPoses, "numVotes", "afterNMSall", true);
+        cout << "NMS results num: " << finalPoses.size() << endl;
         results = finalPoses;
-        
+
+        // overlap
+        //freespaceRatio(finalPoses, model_diameter * 0.005);
+        //overlapRatio(sampled_pc_refinement, downsample_scene_dense_refinement, downsample_scene_dense_refinement_flannIndex, finalPoses, model_diameter * 0.02, 25);
+        //std::sort(finalPoses.begin(), finalPoses.end(), pose3DPtrCompareOverlap);
+        //debugPose(finalPoses, "overlap", "afterOverlapRatio", true);
+        //results = finalPoses;
+
+        int postPoseNum = 200;
+        if (finalPoses.size() < postPoseNum) postPoseNum = finalPoses.size();
+        vector<Pose3DPtr> resultsPost(finalPoses.begin(), finalPoses.begin() + postPoseNum);
+        results = resultsPost;
+        cout << "NMS results num: " << results.size() << endl;
 
         if (debug) {
-            debugPose(results, "overlap", "afterNMS", true);
-            cout << "NMS results num: " << results.size() << endl;
+            //debugPose(results, "overlap", "afterNMS", true);
+            //debugPose(results, "numVotes", "afterNMStop200", true);
         }
     }
 
@@ -1670,30 +2382,53 @@ void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bo
         // sparse refine
         //SparseICP(results, sampled_pc_refinement, downsample_scene, 5);
 
-        //icp.registerModelToScene(sampled_pc_refinement, downsample_scene, results);
+        //icp.registerModelToScene(sampled_pc_refinement, downsample_scene_sparse_refinement, results);
 
 
-        //overlapRatio(sampled_pc_refinement, downsample_scene, downsample_scene_flannIndex, results, model_diameter * 0.08, 25);//relative_scene_distance * 0.8
+        //overlapRatio(sampled_pc_refinement, downsample_scene_sparse_refinement, downsample_scene_sparse_refinement_flannIndex, results, model_diameter * 0.02, 25);//relative_scene_distance * 0.8
         //std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
 
         // dense refine
         //SparseICP(results, sampled_pc_refinement, downsample_scene_dense_refinement, 5);
 
         icp.registerModelToScene(sampled_pc_refinement, downsample_scene_dense_refinement, results);
-
-        overlapRatio(sampled_pc_refinement, downsample_scene_dense_refinement, downsample_scene_dense_refinement_flannIndex, results, model_diameter * 0.005, 25);
+        //double angle_th = 30;
+        //double dist_th = model_diameter * 0.02;
+        //overlapRatio(sampled_pc_refinement, downsample_scene_dense_refinement, downsample_scene_dense_refinement_flannIndex, results, dist_th, angle_th, 1); //model_diameter * 0.005, 25
+        double dist_th = model_diameter * 0.01;
+        sdfRatio(results, dist_th);
+        freespaceRatio(results, dist_th); // model_diameter * 0.01
         std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
-        if (debug) debugPose(results, "overlap", "afterRefinement", true);
+        //if (debug) debugPose(results, "overlap", "afterOverlapRatio", true);
 
-        //std::vector<Pose3DPtr> filterRes;
-        //freespaceIntersectionCount(results, filterRes, 30);
-        //results = filterRes;
-        //std::sort(results.begin(), results.end(), pose3DPtrCompare);
-        //if (debug) debugPose(results, "overlap", "afterRF", true); // Refine Freespace
+
+        std::vector<Pose3DPtr> finalPoses;
+        //NMSbbox(results, 0.5, finalPoses);
+        //cout << "NMS results num: " << finalPoses.size() << endl;
+        //results = finalPoses;
+        NMScenter(results, 0.3, finalPoses); // 0.3
+        cout << "NMS results num: " << finalPoses.size() << endl;
+        results = finalPoses;
+        //if (debug) debugPose(results, "overlap", "afterNMScenter", true);
+
+        //icp.registerModelToScene(sampled_pc_refinement, downsample_scene_dense_refinement, results);
+        //overlapRatio(sampled_pc_refinement, downsample_scene_dense_refinement, downsample_scene_dense_refinement_flannIndex, results, model_diameter * 0.03, 30, 1); //model_diameter * 0.03, 25
+        ////freespaceRatio(results, model_diameter * 0.01); // model_diameter * 0.01
+        //std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
+        ////if (debug) debugPose(results, "overlap", "afterRefinement", true);
+        //NMScenter(results, 0.2, finalPoses);
+        //cout << "NMS results num: " << finalPoses.size() << endl;
+        //results = finalPoses;
+
+
 
     }
 
+}
 
+void PPF3DDetector::deleteFlannPtr() {
+    destroyFlann(downsample_scene_sparse_refinement_flannIndex);
+    destroyFlann(downsample_scene_dense_refinement_flannIndex);
 }
 
 /*
@@ -1702,13 +2437,17 @@ scoreType: numVotes or overlap
 */ 
 void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, std::string scoreType, std::string stage, bool save, std::string saveFolder){
     double th = 0.1 * model_diameter;
-    Mat pct_gt = gtPoseModel;
     int poseNum = Poses.size();
     vector<bool> whetherTP(poseNum, false);
     vector<double> scores(poseNum, 0);
 
+    Mat center = Mat(1, model_center.rows, CV_32F);
+    float* pcData = center.ptr<float>(0);
+    pcData[0] = (float)model_center[0];
+    pcData[1] = (float)model_center[1];
+    pcData[2] = (float)model_center[2];
+
     // 用 TP 对应的位姿，对模型做变换，存下来，看看为啥得票数那么低
-    int tpC = 0;
 
 #if defined _OPENMP
 #pragma omp parallel for
@@ -1727,24 +2466,65 @@ void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, std::string scoreTy
         //else if (scoreType == "freespace") {
         //    scores[i] = Pose->freespaceIntersec;
         //}
-        else{
+        else {
             cout << "wrong scoreType: " << scoreType << endl; exit(1);
         }
 
         // TP = 0, 1
-        if (isTPUsingADD(pct_gt, pct_pred, th)) {
-            whetherTP[i] = 1;
+        if (use_multi_gt_pose) {
+
+            Mat features;
+            pct_pred.colRange(0, 3).copyTo(features);
+            kdtree::KDTree* model_tree = kdtree::BuildKDTree(features);
+            Mat cp = transformPCPose(center, Pose->pose);
+
+            // compare with all gt pose
+            //vector<int> cases{ 0 ,4, 5 };
+            //for (int igt = 0; igt < multi_gt_pose_model.size(); igt++) {
+            vector<int> cases{ 4 };
+            for (int igt : cases) {
+                
+                // prefilter with center distance
+                Vec3f cd = multi_gt_pose_center[igt].at<Vec3f>(0, 0) - cp.at<Vec3f>(0, 0); //https://www.cnblogs.com/hsy1941/p/8298314.html
+                if (cv::norm(cd) < 0.5 * model_diameter) {
+                    // ADI
+
+                    Mat queries;
+                    multi_gt_pose_model[igt].colRange(0, 3).copyTo(queries);
+                    //cout << pc.at<float>(0, 0) << pc.at<float>(0, 1) << pc.at<float>(0, 2) << endl;
+                    std::vector<std::vector<int>> indices;
+                    std::vector<std::vector<float>> dists;
+                    kdtree::SearchKDTree(model_tree, queries, indices, dists, 1);
+                    double totalD_ADI = 0;
+                    for (int ii = 0; ii < queries.rows; ii++)
+                    {
+                        totalD_ADI += sqrt(dists[ii][0]);
+                    }
+                    totalD_ADI /= queries.rows;
+                    if (totalD_ADI < th) {
+                        whetherTP[i] = 1;
+                        break;
+                    }
+                }
+            }
+            delete model_tree;
         }
+        else {
+            if (isTPUsingADD(gtPoseModel, pct_pred, th))
+                whetherTP[i] = 1;
+        }
+
         // 对于是TP的pose，以及排名前三的pose，将model根据他们做转换，保存下来
-        if (whetherTP[i] == 1 || i < 3){
+        //if (whetherTP[i] == 1 || i < 3) {
+        if (stage == "afterNMScenter" && (whetherTP[i] == 1 || i < 3) || (whetherTP[i] == 1 || i < 3)) {
             if (save) {
                 // saveFolder = "HoughVot/"
-                string prefix = "../samples/data/results/" + debug_folder_name + "/debug_" + saveFolder + stage + "_" + to_string(i+1);
+                string prefix = "../samples/data/results/" + debug_folder_name + "/debug_" + saveFolder + stage + "_" + to_string(i + 1);
                 string debugName = prefix + "_" + scoreType + "_" + to_string(scores[i]);
                 writePLY(pct_pred, (debugName + ".ply").c_str());
 
-                 //save votes' point cloud
-                //if (stage == "afterHoughVot") {
+                //save votes' point cloud
+               //if (stage == "afterHoughVot") {
                 if (0) {
                     Mat votes = Pose->voters;
                     string votesNameSi = debugName + "_si" + ".ply";
@@ -1752,16 +2532,17 @@ void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, std::string scoreTy
                     string votesNameSj = debugName + "_sj" + ".ply";
                     string votesNameMj = debugName + "_mj" + ".ply";
                     Mat pct_pred_mi = transformPCPose(votes.row(1), Pose->pose);
-                    Mat pct_pred_mj = transformPCPose(votes.rowRange( 2+(votes.rows-2)/2, votes.rows), Pose->pose);
-                    
+                    Mat pct_pred_mj = transformPCPose(votes.rowRange(2 + (votes.rows - 2) / 2, votes.rows), Pose->pose);
+
                     writePLY(votes.row(0), votesNameSi.c_str());
                     writePLY(pct_pred_mi, votesNameMi.c_str());
-                    writePLY(votes.rowRange(2, 2+(votes.rows-2)/2), votesNameSj.c_str());
+                    writePLY(votes.rowRange(2, 2 + (votes.rows - 2) / 2), votesNameSj.c_str());
                     writePLY(pct_pred_mj, votesNameMj.c_str());
                 }
             }
         }
     }
+
 
     // write vector to txt
     string whetherTPPath = "../samples/data/results/"+ debug_folder_name + "/debug_whetherTP_" +  stage+".txt";

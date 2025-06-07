@@ -309,12 +309,282 @@ int evalUwa(string & Method) {
     return 0;
 }
 
-void evalKinect() {
-    string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/Kinect/";
+int evalRateKinect(string& Method) {
+
+    string method = Method;
+    cout << "*****************************  " << method << "  *****************************" << endl;
+
+    string dataName = "Kinect";
+    double ADD_scale = 0.1;
+    cout << "eval " << dataName << ", ADD_scale = " << ADD_scale << endl;
+
+    string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/OpenCV_datasets/"+ dataName + "/";
     string configPath = "/3D models/CVLab/Kinect/ObjectRecognition/Scenes/2011_06_27/configwithbestview/";
-    string rePath = "D:/wenhao.sun/Documents/GitHub/1-project/Halcon_benchmark/halconResults/kinect/";
+    string predPath = "D:/wenhao.sun/Documents/GitHub/1-project/testResults/" + method + "Results/" + dataName + "/";
+    string modelPath = rootPath + configPath;
+    string evalFileRootPath = "D:/wenhao.sun/Documents/GitHub/1-project/eval/" + method + "Eval/" + dataName + "/";
+
+    int tp_num = 0;
+    int all_num = 0;
+    vector<double> times;
+
+    //vector<string> uwaModelName{ "parasaurolophus_high", "cheff", "chicken_high", "T-rex_high" };
+    ////cout << uwaModelName[0] << endl;
+    //map< string, vector<double>> ADDMap;
+    //map< string, vector<double>> ADIMap;
+    //map< string, vector<double>> centerErrorMap;
+    //map< string, vector<double>> phiMap;
+    //map< string, vector<double>> dNormMap;
+    //map< string, vector<double>> timeMap;
+    //map< string, vector<double>> occulsionMap;
+    //map< string, vector<string>> checkTableMap;
+
+    /*for (int i = 0; i < uwaModelName.size(); i++) {
+        ADDMap[uwaModelName[i]] = vector<double>();
+        ADIMap[uwaModelName[i]] = vector<double>();
+        centerErrorMap[uwaModelName[i]] = vector<double>();
+        phiMap[uwaModelName[i]] = vector<double>();
+        dNormMap[uwaModelName[i]] = vector<double>();
+        timeMap[uwaModelName[i]] = vector<double>();
+        occulsionMap[uwaModelName[i]] = vector<double>();
+        checkTableMap[uwaModelName[i]] = vector<string>();
+    }*/
+    /*string ADDName              = evalFileRootPath + (string)"/eval_ADD.txt";
+    string ADIName              = evalFileRootPath + (string)"/eval_ADI.txt";
+    string centerErrorName      = evalFileRootPath + (string)"/eval_centerError.txt";
+    string phiName              = evalFileRootPath + (string)"/eval_phi.txt";
+    string dNormName            = evalFileRootPath + (string)"/eval_dNorm.txt";
+    string timeName             = evalFileRootPath + (string)"/eval_time.txt";
+    string occulsionName        = evalFileRootPath + (string)"/eval_occulsion.txt";
+    string DiamtersName         = evalFileRootPath + (string)"/eval_Diamters.txt";
+    string checkTableName       = evalFileRootPath + (string)"/checkTable.txt";*/
+
+    // 计算直径, center point
+    //map<string, double> Diamters;
+    //map<string, Vec3f> Centers;
+    //map<string, Mat> modelPC;
+    //string modelFilePath;
+    //for (int i = 0; i < uwaModelName.size(); i++) {
+    //    modelFilePath = modelPath + uwaModelName[i] + "_0.ply";
+    //    Mat pc = loadPLYSimple(modelFilePath.c_str(), 1);
+    //    modelPC[uwaModelName[i]] = pc;
+    //    Vec2f xRange, yRange, zRange;
+    //    computeBboxStd(pc, xRange, yRange, zRange);
+    //    float dx = xRange[1] - xRange[0];
+    //    float dy = yRange[1] - yRange[0];
+    //    float dz = zRange[1] - zRange[0];
+    //    float diameter = sqrt(dx * dx + dy * dy + dz * dz);
+    //    Diamters[uwaModelName[i]] = diameter;
+
+    //    Vec3f center;
+    //    center[0] = (xRange[1] + xRange[0]) / 2;
+    //    center[1] = (yRange[1] + yRange[0]) / 2;
+    //    center[2] = (zRange[1] + zRange[0]) / 2;
+    //    Centers[uwaModelName[i]] = center;
+    //}
 
 
+    // 所有场景
+    string cfgsFile = rootPath + configPath + "configFilesList.txt";
+    vector<string> cfgNameAll;
+    ifstream cfg_ifs(cfgsFile);
+    string cfgName0;
+    while (getline(cfg_ifs, cfgName0)) {
+        cfgNameAll.push_back(cfgName0);
+    }
+    cfg_ifs.close();
+
+    for (int icfg = 0; icfg < cfgNameAll.size(); icfg++) {
+        //for (int icfg = 0; icfg < 1; icfg++) {
+        auto& cfgName = cfgNameAll[icfg];
+        // 单个场景
+        string cfgPath0 = rootPath + configPath + cfgName;//cfgName
+        LPCTSTR cfgPath = cfgPath0.c_str();
+
+        // 多个模型
+
+        LPSTR  modelNumCh = new char[1024];
+        GetPrivateProfileString("MODELS", "NUMBER", "NULL", modelNumCh, 512, cfgPath);
+        int modelNum = atoi(modelNumCh);
+        string modelKey, modelGTKey, modelOccluKey;
+        for (int i = 0; i < modelNum; i++) {
+            modelKey = "MODEL_" + to_string(i);
+            modelGTKey = modelKey + "_GROUNDTRUTH";
+            modelOccluKey = modelKey + "_OCCLUSION";
+
+            // 单个模型
+            // read mdoel
+            LPSTR  modelPath0 = new char[1024];
+            GetPrivateProfileString("MODELS", modelKey.c_str(), "NULL", modelPath0, 512, cfgPath);
+            string mPath1 = rootPath + modelPath0;
+
+            string modelNameInCfg;
+            {
+                std::vector<std::string> mStr, mn;
+                boost::split(mStr, mPath1, boost::is_any_of("/"));
+                boost::split(mn, *(mStr.end() - 1), boost::is_any_of("."));
+                modelNameInCfg = mn[0];
+            }
+
+
+            string mPath = mPath1.substr(0, mPath1.length() - 4) + "_0.ply";
+            Mat pc = loadPLYSimple(mPath.c_str(), 1);
+            Vec3f p1(pc.ptr<float>(0));
+            Vec2f xRange, yRange, zRange;
+            computeBboxStd(pc, xRange, yRange, zRange);
+            float dx = xRange[1] - xRange[0];
+            float dy = yRange[1] - yRange[0];
+            float dz = zRange[1] - zRange[0];
+            double diameter = sqrt(dx * dx + dy * dy + dz * dz);
+            double thre = ADD_scale * diameter;
+
+
+
+            // read gt 
+            LPSTR  gtPath0 = new char[1024];
+            GetPrivateProfileString("MODELS", modelGTKey.c_str(), "NULL", gtPath0, 512, cfgPath);
+            string gtPath = rootPath + gtPath0;
+            string gtName;
+            {
+                std::vector<std::string> mStr, mn;
+                boost::split(mStr, gtPath, boost::is_any_of("/"));
+                boost::split(mn, *(mStr.end() - 1), boost::is_any_of("."));
+                gtName = mn[0];
+            }
+
+            ifstream gt_ifs(gtPath);
+            if (!gt_ifs.is_open()) { cout << "not open: " << gtPath << endl; exit(1); }
+            Matx44d gt_pose;
+            for (int ii = 0; ii < 4; ii++)
+                for (int jj = 0; jj < 4; jj++)
+                {
+                    gt_ifs >> gt_pose(ii, jj);
+                }
+            gt_ifs.close();
+
+
+            // read pred
+            string predFilePath = predPath + gtName + ".txt";
+            ifstream pred_ifs(predFilePath);
+            if (!pred_ifs.is_open()) exit(1);
+
+            string modelNameInPred;
+            getline(pred_ifs, modelNameInPred); ////////
+            if (modelNameInPred != modelNameInCfg) { cout << "not same: " << "gt " << gtPath << "pred " << predFilePath << endl; exit(1); }
+            string timeStr;
+            getline(pred_ifs, timeStr);
+            int n = timeStr.find("=");
+            string timeStr2 = timeStr.substr(n + 1, timeStr.length() - n);
+            //cout << timeStr2 << endl;
+            double time = stod(timeStr2, 0);
+            //timeMap[modelNameInPred].push_back(time);
+            times.push_back(time);
+
+            Matx44d pred_pose;
+            for (int ii = 0; ii < 4; ii++)
+                for (int jj = 0; jj < 4; jj++)
+                {
+                    pred_ifs >> pred_pose(ii, jj);
+                }
+            pred_ifs.close();
+
+            // build check table
+            // reaf scene path from cfg
+            //LPSTR  scenePath0 = new char[1024];
+            //GetPrivateProfileString("SCENE", "PATH", "NULL", scenePath0, 512, cfgPath);
+            //string sceneName;  //用来索引已经读取的模型点云
+            //{
+            //    std::vector<std::string> mStr, mn;
+            //    boost::split(mStr, scenePath0, boost::is_any_of("/"));
+            //    boost::split(mn, *(mStr.end() - 1), boost::is_any_of("."));
+            //    sceneName = mn[0];
+            //}
+            //string str = gtName + "_" + sceneName; ////////////////////////
+            //checkTableMap[modelNameInPred].push_back(str);
+
+            // ADD
+            //Mat& pc = modelPC[modelNameInPred];
+            Mat pct_gt = transformPCPose(pc, gt_pose); //pc是原始模型
+            Mat pct_pred = transformPCPose(pc, pred_pose); //pc是原始模型
+
+            double totalD_ADD = 0;
+            for (int ii = 0; ii < pct_gt.rows; ii++)
+            {
+                Vec3f v1(pct_gt.ptr<float>(ii));
+                //const Vec3f n1(pct_gt.ptr<float>(ii) + 3);
+                Vec3f v2(pct_pred.ptr<float>(ii));
+                v1 = v1 - v2;
+                totalD_ADD += cv::norm(v1);
+            }
+            totalD_ADD /= pct_gt.rows;
+            //ADDMap[modelNameInCfg].push_back(totalD_ADD);
+            if (totalD_ADD < thre) {
+                tp_num += 1;
+            }
+            all_num += 1;
+
+            // ADI
+            //Mat features;
+            //Mat queries;
+            //pct_gt.colRange(0, 3).copyTo(features);
+            //pct_pred.colRange(0, 3).copyTo(queries);
+
+            ////cout << pc.at<float>(0, 0) << pc.at<float>(0, 1) << pc.at<float>(0, 2) << endl;
+
+            //KDTree* model_tree = BuildKDTree(features);
+            //std::vector<std::vector<int>> indices;
+            //std::vector<std::vector<float>> dists;
+            //SearchKDTree(model_tree, queries, indices, dists, 1);
+            //delete model_tree;
+            //double totalD_ADI = 0;
+            //for (int ii = 0; ii < queries.rows; ii++)
+            //{
+            //    totalD_ADI += sqrt(dists[ii][0]);
+            //}
+            //totalD_ADI /= queries.rows;
+            //ADIMap[modelNameInCfg].push_back(totalD_ADI);
+
+            // manifold 
+            //Eigen::Matrix<double, 4, 4> gtMatrix;
+            //cv::cv2eigen(gt_pose, gtMatrix); // cv::Mat 转换成 Eigen::Matrix
+            //Eigen::Affine3f gtPose;
+            //gtPose.matrix() = gtMatrix.cast<float>();
+            ////cout << gtPose.rotation() << endl;
+            ////cout << gtPose.translation() << endl;
+
+            //Eigen::Matrix<double, 4, 4> predMatrix;
+            //cv::cv2eigen(pred_pose, predMatrix); // cv::Mat 转换成 Eigen::Matrix
+            //Eigen::Affine3f predPose;
+            //predPose.matrix() = predMatrix.cast<float>();
+
+            //Eigen::Matrix3f RtRsInv(gtPose.rotation().inverse().lazyProduct(predPose.rotation()).eval());
+            //Eigen::AngleAxisf rotation_diff_mat(RtRsInv); //tr(Rs.inv * Rt) = tr(Rt * Rs.inv)
+            //double phi = std::abs(rotation_diff_mat.angle());
+            //float dNorm = (gtPose.translation() - predPose.translation()).norm();
+            //phiMap[modelNameInCfg].push_back(phi);
+            //dNormMap[modelNameInCfg].push_back(dNorm);
+        }
+    }
+
+    // ADI 
+    cout << "ADD" << endl;
+    double avergRecall = 0;
+
+    avergRecall = (double)tp_num / all_num;
+    cout << "ADD recognition rate: " << tp_num << " / " << all_num  << " = " << avergRecall << endl;
+    cout << endl;
+
+    cout << "Time" << endl;
+    double avgAllInferenceTime = 0;
+    double sumTime = 0;
+    for (auto x : times) {
+        sumTime += x;
+    }
+    avgAllInferenceTime = sumTime / times.size();
+    cout << "Average time of all instances of all objects: " << "sum{inference time of one obj in a scene} / " << times.size() << " = " << avgAllInferenceTime << endl;
+    cout << endl;
+
+    return 0;
 }
 
 int rateUwa(string& Method) {
@@ -670,8 +940,12 @@ int evalRateIcbin(string& Method) {
                 int eqn1 = modelNameModelCountInPred.find("=");
                 string modelNameInPred = modelNameModelCountInPred.substr(0, eqn1);
                 int modelCountInPred = atoi(modelNameModelCountInPred.substr(eqn1 + 1, modelNameModelCountInPred.length() - eqn1).c_str());
-                if (modelNameInPred != modelName) { cout << "not same: " << "scenario " << scenarioName << "scene " << singleScene << "pred " << predFilePath << endl; exit(1); }
-                if (modelCountInPred != modelCount) { cout << "not same: " << "scenario " << scenarioName << "scene " << singleScene << "pred " << predFilePath << endl; exit(1); }
+                if (modelNameInPred != modelName) { cout << "not same: " << "scenario: " << scenarioName << ", scene " << singleScene << ", pred: " << predFilePath << endl; exit(1); }
+                if (modelCountInPred != modelCount) { 
+                    cout << "not same: " << "scenario: " << scenarioName << ", scene: " << singleScene << ", pred: " << predFilePath << endl; 
+                    //exit(1); 
+                    cout << "modelCountInPred: " << modelCountInPred << ", modelCountInCfg: " << modelCount << endl;
+                }
                 // time
                 string timeStr;
                 getline(pred_ifs, timeStr);
@@ -681,10 +955,10 @@ int evalRateIcbin(string& Method) {
                 double time = stod(timeStr2, 0);
                 times.push_back(time);
                 // poses
-                vector<Matx44d> pred_poses(modelCount);
-                vector<float> scores(modelCount);
+                vector<Matx44d> pred_poses(modelCountInPred);
+                vector<float> scores(modelCountInPred);
                 string idx_score;
-                for (int ip = 0; ip < modelCount; ip++) {
+                for (int ip = 0; ip < modelCountInPred; ip++) {
                     pred_ifs >> idx_score; int n = idx_score.find("=");
                     scores[ip] = stof(idx_score.substr(n + 1, idx_score.length() - n));
                     for (int ii = 0; ii < 4; ii++)
@@ -719,26 +993,29 @@ int evalRateIcbin(string& Method) {
 
                 //3. assign tp https://zhuanlan.zhihu.com/p/37910324
                 // center tranformed by pose_pred pose_gt
-                vector<Mat> cp(modelCount), cg(modelCount);
                 Vec3f centerV = Centers[modelName];
                 Mat center = Mat(1, centerV.rows, CV_32F);
                 float* pcData = center.ptr<float>(0);
                 pcData[0] = (float)centerV[0];
                 pcData[1] = (float)centerV[1];
                 pcData[2] = (float)centerV[2];
-                for (int ic = 0; ic < modelCount; ic++) {
-                    cg[ic] = transformPCPose(center, gt_poses[ic]); 
-                    cp[ic] = transformPCPose(center, pred_poses[ic]); 
+                vector<Mat> cg(modelCount);
+                for (int igt = 0; igt < modelCount; igt++) {
+                    cg[igt] = transformPCPose(center, gt_poses[igt]);
+                }
+                vector<Mat> cp(modelCountInPred);
+                for (int ip = 0; ip < modelCountInPred; ip++) {
+                    cp[ip] = transformPCPose(center, pred_poses[ip]);
                 }
                 // assign tp for ever pred pose
-                vector<int> tp(modelCount, 0);
-                vector<int> fp(modelCount, 0);
+                vector<int> tp(modelCountInPred, 0);
+                vector<int> fp(modelCountInPred, 0);
                 vector<bool> gt_detected(modelCount, false);
 
                 double thres = ADI_scale * Diamters[modelName]; ///thres
                 Mat& pc = modelPC[modelName];
 
-                for (int ip = 0; ip < modelCount; ip++) {
+                for (int ip = 0; ip < modelCountInPred; ip++) {
                     Mat pct_pred = transformPCPose(pc, pred_poses[ip]); //pc是原始模型
                     Mat features;
                     pct_pred.colRange(0, 3).copyTo(features);
@@ -796,6 +1073,11 @@ int evalRateIcbin(string& Method) {
                     tpsum += x;
                 modelTPMap[modelName] += tpsum;
                 modelTotalNumMap[modelName] += modelCount;
+
+                double rate = (double)tpsum / (double)modelCount;
+                if (rate < 0.7) {
+                   cout <<  scenarioName + "-" + sid + "-" + modelName <<endl;
+                }
             }
         }
     }
@@ -1090,11 +1372,15 @@ int main() {
     //evalUwa(method);
     //rateUwa(method);
 
+    // kinect
+    //evalRateKinect(method);
+
+
     // icbin
-    //evalRateIcbin(method);
+    evalRateIcbin(method);
 
     // lmo
-    evalRateLmo(method);
+    //evalRateLmo(method);
 
 
     //writeMap();

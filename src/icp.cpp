@@ -249,6 +249,7 @@ int ICP::registerModelToScene(const Mat& srcPC, const Mat& dstPC, double& residu
   CV_CheckGT(n, 0, "");
 
   const bool useRobustReject = m_rejectionScale>=0; // > 0
+  //const bool useRobustReject = true;
 
   Mat srcTemp = srcPC.clone();
   Mat dstTemp = dstPC.clone();
@@ -339,7 +340,7 @@ int ICP::registerModelToScene(const Mat& srcPC, const Mat& dstPC, double& residu
         int numInliers = 0;
         float threshold = getRejectionThreshold(distances, Distances.rows, m_rejectionScale);
         Mat acceptInd = Distances < (threshold / 10.); // Distances<threshold
-        //Mat acceptInd = Distances< threshold; // Distances<threshold
+        //Mat acceptInd = Distances< dist_th; // Distances<threshold
 
         uchar *accPtr = (uchar*)acceptInd.data;
         for (int l=0; l<acceptInd.rows; l++)

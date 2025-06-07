@@ -114,23 +114,35 @@ public:
 
   Mat getSampledModel();
   void enableDebug(bool Debug);
+  void enableFreeSpaceConstraint(bool usfs);
   void setSceneKeypointForDebug(Mat& PC);
   void setGtPose(Matx44d& Pose);
+  void setMultiGtPose(std::vector<Matx44d>& Pose, std::string& debugGTPoseModelPath);
   void saveGTPoseModel(std::string& path);
   void setDebugFolderName(std::string& path);
 
   void setSamplingMethod(std::string& Method);
   void setNMSThreshold(double th);
+  void setClusterThreshold(double th);
   void setOrientationDiffThreshold(double th);
   void setSDF(std::shared_ptr < Discregrid::DiscreteGrid>& sdfPtr);
-  void generateFreeSpaceVolume(float& resulotion);
+  void generateFreeSpaceVolume(Mat& sampled_for_freespace, float resulotion);
+  void setPPFAngleConstraint(double& angle_th);
+  void setPPFDistanceConstraint(double& dist_th);
 
   void  PPF3DDetector::SparseICP(std::vector<Pose3DPtr>& resultsS, Mat& srcPC, Mat& dstPC, const int ICP_nbIterations);
-  void PPF3DDetector::overlapRatio(const Mat& srcPC, const Mat& dstPC, void* dstFlann, std::vector<Pose3DPtr>& resultsS, double threshold, double anglethreshold);
+  void PPF3DDetector::overlapRatio(const Mat& srcPC, const Mat& dstPC, void* dstFlann, std::vector<Pose3DPtr>& resultsS, double threshold, double anglethreshold, int num_neighbors=1);
   void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bool refineEnabled, bool nmsEnabled);
-  void PPF3DDetector::NMS(std::vector<Pose3DPtr>& poseList, double Threshold, std::vector<Pose3DPtr>& finalPoses);
+  void PPF3DDetector::NMScenter(std::vector<Pose3DPtr>& poseList, double Threshold, std::vector<Pose3DPtr>& finalPoses);
+  void PPF3DDetector::NMSbbox(std::vector<Pose3DPtr>& poseList, double Threshold, std::vector<Pose3DPtr>& finalPoses);
   void PPF3DDetector::debugPose(std::vector<Pose3DPtr>& Poses, std::string scoreType, std::string stage, bool save = false, std::string saveFolder = "");
-  void PPF3DDetector::freespaceIntersectionCount( std::vector<Pose3DPtr>& resultsS, std::vector<Pose3DPtr>& finalPoses, const int& th);
+  void PPF3DDetector::freespaceIntersectionCount( std::vector<Pose3DPtr>& resultsS, std::vector<Pose3DPtr>&  p, const int& th);
+  void PPF3DDetector::freespaceRatio(std::vector<Pose3DPtr>& resultsS, const double& th);
+  void PPF3DDetector::sdfRatio(std::vector<Pose3DPtr>& resultsS, const double& th);
+  void PPF3DDetector::deleteFlannPtr();
+  void PPF3DDetector::setModelTriplet(Vec3f& center, float diameter);
+  Mat PPF3DDetector::SubtractPlane(const Mat& scenePC, float dist);
+  void PPF3DDetector::avg_quaternion_markley(Vec4d& qs_avg_cv, std::vector< Vec4d> qs_cv);
 
 protected:
 
@@ -151,6 +163,11 @@ protected:
   std::string debug_folder_name;
   Matx44d gtPose;
   Mat gtPoseModel;
+  std::vector<Matx44d> multi_gt_pose;
+  bool use_multi_gt_pose = false;
+  std::vector<Mat> multi_gt_pose_model;
+  std::vector<Mat> multi_gt_pose_center;
+
   Mat debug_sampled_scene_ref;
 
   std::string samplingMethod; // preprocess
@@ -158,18 +175,24 @@ protected:
   double model_diameter;  // model
   double model_minimum_length;
   Vec3f model_center;
+  Mat model_bbox;
+  Mat model_triplet;
   Mat sampled_pc_refinement;
+  double ppf_angle_constraint;
+  double ppf_distance_constraint;
 
-  double relative_scene_distance;  // scene
-  Mat downsample_scene;
-  Mat downsample_scene_freespace;
+  double relative_scene_distance;  // match
+  Mat scene_freespace;
+  Mat downsample_scene_sparse_refinement;
   Mat downsample_scene_dense_refinement;
-  void* downsample_scene_flannIndex;
+  void* downsample_scene_sparse_refinement_flannIndex;
   void* downsample_scene_dense_refinement_flannIndex;
   double orientation_diff_threshold;
   std::shared_ptr < Discregrid::DiscreteGrid> sdf_ptr;
+  bool useFreeSpaceConstraint;
 
   double nmsThreshold; // postprocess
+  double clusterThreshold;
   //
 
   void clearTrainingModels();
@@ -180,8 +203,10 @@ private:
                           Vec4d& f);
 
   bool matchPose(const Pose3D& sourcePose, const Pose3D& targetPose);
+  bool matchPoseInR3(const Pose3D& sourcePose, const Pose3D& targetPose);
 
-  void clusterPoses(std::vector<Pose3DPtr>& poseList, int numPoses, std::vector<Pose3DPtr> &finalPoses);
+  void clusterPoses(std::vector<Pose3DPtr>& poseList, int numPoses, std::vector<Pose3DPtr>& finalPoses);
+  void clusterPosesInR3(std::vector<Pose3DPtr>& poseList, int numPoses, std::vector<Pose3DPtr> &finalPoses);
 
   bool trained;
 };

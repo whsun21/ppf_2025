@@ -139,6 +139,8 @@ public:
   double overlap;
   Mat voters;
   double freespaceIntersec;
+  int cluster_count;
+  std::vector< Vec4d> qs;
 };
 
 /**

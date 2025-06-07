@@ -181,13 +181,13 @@ Pose3DPtr Pose3D::clone()
   new_pose->angle = angle;
   new_pose->overlap = overlap;
   new_pose->freespaceIntersec = freespaceIntersec;
-
+  new_pose->cluster_count = cluster_count;
   return new_pose;
 }
 
 void Pose3D::printPose()
 {
-  printf("\n-- Pose to Model Index %d: NumVotes = %d, Overlap = %f, Residual = %f\n", (uint)this->modelIndex, (uint)this->numVotes, this->overlap, this->residual);
+  printf("\n-- Pose to Model Index %d: NumVotes = %d, Overlap = %f, FreeSpace = %f, Residual = %f\n", (uint)this->modelIndex, (uint)this->numVotes, this->overlap, this->freespaceIntersec, this->residual);
   std::cout << this->pose << std::endl;
 }
 

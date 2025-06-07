@@ -175,6 +175,23 @@ bool isTPUsingADD(cv::Mat& pct_gt, cv::Mat& pct_pred, double th) {
     return tp;
 }
 
+bool isTPUsingADIIIII(cv::Mat& pct_gt, cv::Mat& pct_pred, double th) {
+    double totalD_AD = 0;
+    bool tp = 0;
+    for (int ii = 0; ii < pct_gt.rows; ii++)
+    {
+        Vec3f v1(pct_gt.ptr<float>(ii));
+        //const Vec3f n1(pct_gt.ptr<float>(ii) + 3);
+        Vec3f v2(pct_pred.ptr<float>(ii));
+        v1 = v1 - v2;
+        totalD_AD += cv::norm(v1);
+    }
+    totalD_AD /= pct_gt.rows;
+    if (totalD_AD < th)
+        tp = 1;
+    return tp;
+}
+
 
 
 typedef cv::flann::L2<float> Distance_32F;
@@ -766,6 +783,9 @@ Mat samplePCByQuantization_cube(Mat pc, Vec2f& xrange, Vec2f& yrange, Vec2f& zra
     int znumSamplesDim = (int)(zr / sampleStep);
 
     int numPoints = 0;
+
+    if (xnumSamplesDim * ynumSamplesDim * znumSamplesDim == 0) // only one point
+        return pc;
 
     map.resize((xnumSamplesDim + 1) * (ynumSamplesDim + 1) * (znumSamplesDim + 1));
 
