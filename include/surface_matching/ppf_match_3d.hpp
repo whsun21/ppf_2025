@@ -107,6 +107,7 @@ public:
     *  @param [in] relativeSceneDistance Set the distance threshold relative to the diameter of the model. This parameter is equivalent to relativeSamplingStep in the training stage. This parameter acts like a prior sampling with the relativeSceneSampleStep parameter.
     */
   CV_WRAP void match(const Mat& scene, CV_OUT std::vector<Pose3DPtr>& results, const double relativeSceneSampleStep = 1.0 / 5.0, const double relativeSceneDistance = 0.03);
+  void spectralMatch(Pose3DPtr& pose, int corres_n, std::vector<std::vector<cv::Mat>>& corr_list, std::vector<std::vector<int>>& corr_ind_list);
   CV_WRAP void debugMatch(const Mat& scene, CV_OUT std::vector<Pose3DPtr> &results, const double relativeSceneSampleStep=1.0/5.0, const double relativeSceneDistance=0.03);
 
   void read(const FileNode& fn);
@@ -129,6 +130,8 @@ public:
   void generateFreeSpaceVolume(Mat& sampled_for_freespace, float resulotion);
   void setPPFAngleConstraint(double& angle_th);
   void setPPFDistanceConstraint(double& dist_th);
+  void setSpectral(bool spectral_);
+
 
   void  PPF3DDetector::SparseICP(std::vector<Pose3DPtr>& resultsS, Mat& srcPC, Mat& dstPC, const int ICP_nbIterations);
   void PPF3DDetector::overlapRatio(const Mat& srcPC, const Mat& dstPC, void* dstFlann, std::vector<Pose3DPtr>& resultsS, double threshold, double anglethreshold, int num_neighbors=1);
@@ -190,6 +193,7 @@ protected:
   double orientation_diff_threshold;
   std::shared_ptr < Discregrid::DiscreteGrid> sdf_ptr;
   bool useFreeSpaceConstraint;
+  bool spectral;
 
   double nmsThreshold; // postprocess
   double clusterThreshold;

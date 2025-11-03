@@ -191,29 +191,179 @@ Average time of all instances of all objects: sum{inference time of one obj in a
 
 
 
-icbin
 
+
+ Kinect ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////  
+rm, rs 0.05
+*****************************  halcon  *****************************
+eval Kinect, ADD_scale = 0.1
+ADD
+ADD recognition rate: 42 / 49 = 0.857143
+
+Time
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / 49 = 0.0871949
+
+*****************************  ppf_2025  *****************************
+eval Kinect, ADD_scale = 0.1
+ADD
+ADD recognition rate: 41 / 49 = 0.836735
+
+Time
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / 49 = 1.89569
+
+*****************************  ppf_2025 复现ppf  *****************************
+eval Kinect, ADD_scale = 0.1
+ADD
+ADD recognition rate: 38 / 49 = 0.77551
+
+Time
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / 49 = 1.19637
+
+
+rm 0.025, rs 0.05
+*****************************  halcon  *****************************
+eval Kinect, ADD_scale = 0.1
+ADD
+ADD recognition rate: 46 / 49 = 0.938776
+
+Time
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / 49 = 0.11273
+*****************************  ppf_2025  *****************************
+eval Kinect, ADD_scale = 0.1
+ADD
+ADD recognition rate: 49 / 49 = 1
+
+Time
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / 49 = 1.37506
+
+
+
+
+
+
+
+
+
+icbin ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////  
+rm 0.05 rs 0.08
 *****************************  halcon  *****************************
 eval & rate icbin scenario2, ADI_scale = 0.1
 ADI
- rateADI: 880 / 1458 = 0.603567          coffee_cup
- rateADI: 216 / 553 = 0.390597          juice
-ADI recognition rate:  sum {recall of single obj} / obj num = 0.497082
+ rateADI: 841 / 1458 = 0.576818          coffee_cup
+ rateADI: 202 / 553 = 0.36528          juice
+ADI recognition rate:  sum {recall of single obj} / obj num = 0.471049
 
 Time
-Average time of all instances of all objects: sum{inference time of one obj in a scene} / 245 = 0.101818
-*****************************  halcon  *****************************
-eval & rate icbin scenario2, ADI_scale = 0.2
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / 245 = 0.0875241
+
+*****************************  ppf_2025  *****************************
+eval & rate icbin scenario2, ADI_scale = 0.1
 ADI
- rateADI: 891 / 1458 = 0.611111          coffee_cup
- rateADI: 222 / 553 = 0.401447          juice
-ADI recognition rate:  sum {recall of single obj} / obj num = 0.506279
+ rateADI: 578 / 1458 = 0.396433          coffee_cup
+ rateADI: 128 / 553 = 0.231465          juice
+ADI recognition rate:  sum {recall of single obj} / obj num = 0.313949
 
 Time
-Average time of all instances of all objects: sum{inference time of one obj in a scene} / inference counts = 0.101818
-*****************************  halcon  *****************************
-eval & rate icbin scenario2, ADI_scale = 0.3
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / 245 = 6.02562
+
+
+*****************************  ppf_2025 复现ppf *****************************
+eval & rate icbin scenario2, ADI_scale = 0.1
 ADI
- rateADI: 912 / 1458 = 0.625514          coffee_cup
- rateADI: 229 / 553 = 0.414105          juice
-ADI recognition rate:  sum {recall of single obj} / obj num = 0.51981
+ rateADI: 528 / 1458 = 0.36214          coffee_cup
+ rateADI: 105 / 553 = 0.189873          juice
+ADI recognition rate:  sum {recall of single obj} / obj num = 0.276007
+
+Time
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / 245 = 14.355
+
+
+
+
+
+
+
+rm 0.03 rs 0.05
+*****************************  halcon  *****************************
+eval & rate icbin scenario2, ADI_scale = 0.1
+ADI
+ rateADI: 842 / 1458 = 0.577503          coffee_cup
+ rateADI: 206 / 553 = 0.372514          juice
+ADI recognition rate:  sum {recall of single obj} / obj num = 0.475008
+
+Time
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / 245 = 0.113751
+*****************************  ppf_2025  *****************************
+eval & rate icbin scenario2, ADI_scale = 0.1
+ADI
+ rateADI: 856 / 1458 = 0.587106          coffee_cup
+ rateADI: 312 / 553 = 0.564195          juice
+ADI recognition rate:  sum {recall of single obj} / obj num = 0.57565
+
+Time
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / 245 = 8.24693
+
+
+
+
+
+
+
+
+
+lmo ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////  
+
+*****************************  halcon  *****************************
+eval & rate lmo, ADDADI_scale = 0.1
+ADD_objs: Ape Can Cat Driller Duck Holepuncher
+ADI_objs: Eggbox Glue
+ADD & ADI
+ rateADI: 466 / 1214 = 0.383855          Ape
+ rateADI: 571 / 1214 = 0.470346          Can
+ rateADI: 302 / 1214 = 0.248764          Cat
+ rateADI: 560 / 1214 = 0.461285          Driller
+ rateADI: 264 / 1214 = 0.217463          Duck
+ rateADI: 463 / 1214 = 0.381384          Eggbox
+ rateADI: 145 / 1214 = 0.11944          Glue
+ rateADI: 65 / 1214 = 0.053542          Holepuncher
+ADI recognition rate:  sum {recall of single obj} / obj num = 0.29201
+
+Time
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / 9712 = 0.11419
+
+lmo masked ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////  
+*****************************  halcon  *****************************
+eval & rate lmo, ADDADI_scale = 0.1
+ADD_objs: Ape Can Cat Driller Duck Holepuncher
+ADI_objs: Eggbox Glue
+ADD & ADI
+ rateADI: 927 / 1166 = 0.795026          Ape
+ rateADI: 1174 / 1207 = 0.972659          Can
+ rateADI: 841 / 1187 = 0.708509          Cat
+ rateADI: 1176 / 1214 = 0.968699          Driller
+ rateADI: 927 / 1135 = 0.81674          Duck
+ rateADI: 1119 / 1170 = 0.95641          Eggbox
+ rateADI: 755 / 897 = 0.841695          Glue
+ rateADI: 193 / 1195 = 0.161506          Holepuncher
+ADI recognition rate:  sum {recall of single obj} / obj num = 0.777655
+
+Time
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / 9171 = 0.00670545
+
+*****************************  ppf_2025  *****************************
+eval & rate lmo, ADDADI_scale = 0.1
+ADD_objs: Ape Can Cat Driller Duck Holepuncher
+ADI_objs: Eggbox Glue
+ADD & ADI
+ rateADI: 717 / 1166 = 0.614923          Ape
+ rateADI: 577 / 1207 = 0.478045          Can
+ rateADI: 529 / 1187 = 0.445661          Cat
+ rateADI: 839 / 1214 = 0.691104          Driller
+ rateADI: 741 / 1135 = 0.652863          Duck
+ rateADI: 1083 / 1170 = 0.925641          Eggbox
+ rateADI: 732 / 897 = 0.816054          Glue
+ rateADI: 112 / 1195 = 0.0937238          Holepuncher
+ADI recognition rate:  sum {recall of single obj} / obj num = 0.589752
+
+Time
+Average time of all instances of all objects: sum{inference time of one obj in a scene} / 9171 = 0.632373

@@ -26,6 +26,19 @@ namespace ppf_match_3d
 
 static const size_t PPF_LENGTH = 6;
 
+static void sort_vec(const VectorXd& vec, VectorXd& sorted_vec, VectorXi& ind) {
+    ind = VectorXi::LinSpaced(vec.size(), 0, vec.size() - 1);//[0 1 2 3 ... N-1]
+    auto rule = [vec](int i, int j)->bool {
+        return vec(i) > vec(j);
+        };//正则表达式，作为sort的谓词
+    std::sort(ind.data(), ind.data() + ind.size(), rule);
+    //data成员函数返回VectorXd的第一个元素的指针，类似于begin()
+    sorted_vec.resize(vec.size());
+    for (int i = 0; i < vec.size(); i++) {
+        sorted_vec(i) = vec(ind(i));
+    }
+}
+
 // routines for assisting sort
 static bool pose3DPtrCompare(const Pose3DPtr& a, const Pose3DPtr& b)
 {
@@ -299,6 +312,10 @@ void PPF3DDetector::setPPFDistanceConstraint(double& dist_th) {
     ppf_distance_constraint = dist_th;
 }
 
+void PPF3DDetector::setSpectral(bool spectral_) {
+    spectral = spectral_;
+}
+
 // compute per point PPF as in paper
 void PPF3DDetector::computePPFFeatures(const Vec3d& p1, const Vec3d& n1,
                                        const Vec3d& p2, const Vec3d& n2,
@@ -460,9 +477,9 @@ void PPF3DDetector::trainModel(const Mat &PC)
 
         double f5theta = computeTheta(p1, n1, p2, n2);
 
-        //KeyType hashValue = hashPPF(f1_4, angle_step_radians, distanceStep);
+        KeyType hashValue = hashPPF(f1_4, angle_step_radians, distanceStep);
         Vec<int, 5> fd;
-        KeyType hashValue = hashPPF3(f1_4, f5theta, fd, angle_step_radians, distanceStep, orientation_diff_threshold);
+        //KeyType hashValue = hashPPF3(f1_4, f5theta, fd, angle_step_radians, distanceStep, orientation_diff_threshold);
         
         double alpha = computeAlpha(p1, n1, p2);
         // 模型点对(mr, mi)的特征在矩阵ppf中的位置
@@ -1262,7 +1279,7 @@ void PPF3DDetector::NMScenter(std::vector<Pose3DPtr>& poseList, double Threshold
 
 }
 
-//void avg_quaternion_markley(Eigen::Vector4f& qs_avg, std::vector< Eigen::Vector4f> qs) {
+
 void PPF3DDetector::avg_quaternion_markley(Vec4d& qs_avg_cv, std::vector< Vec4d> qs_cv) {
 
 
@@ -1375,6 +1392,8 @@ void PPF3DDetector::NMSbbox(std::vector<Pose3DPtr>& poseList, double Threshold, 
     }
 
 }
+
+
 //
 //int nonMaximumSuppression(int numBoxes, const CvPoint* points,
 //    const CvPoint* oppositePoints, const float* score,
@@ -1682,10 +1701,10 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
         /**** 计算 theta_s ****/
         double f5theta = computeTheta(p1, n1, p2, n2);
 
-        //KeyType hashValue = hashPPF(f1_4, angle_step, distanceStep);
+        KeyType hashValue = hashPPF(f1_4, angle_step, distanceStep);
 
-        Vec<int, 5> fd;
-        KeyType hashValue = hashPPF3(f1_4, f5theta, fd, angle_step, distanceStep, orientation_diff_threshold);
+        //Vec<int, 5> fd;
+        //KeyType hashValue = hashPPF3(f1_4, f5theta, fd, angle_step, distanceStep, orientation_diff_threshold);
 
         // 计算 alpha_s
         Vec3d p2t;
@@ -1710,10 +1729,10 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
             // 对于匹配到的一个模型点对(mr, mi)
             THash* tData = (THash*) node->data;
 
-            if (!(tData->fd == fd)) { 
-                node = node->next; 
-                continue; 
-            }
+            //if (!(tData->fd == fd)) { 
+            //    node = node->next; 
+            //    continue; 
+            //}
 
             // mr的下标r, r属于[0, |M|-1]
             int corrI = (int)tData->i;
@@ -1796,11 +1815,10 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
             accumulator[accIndex]++;
 
             // saveVoters
-            //if (debug) {
-            //    Mat corres = (cv::Mat_<int>(1, 3) << j, ppfInd, corrI);
-            //    coordAccumulator[accIndex].push_back(corres);
-
-            //}
+            if (spectral) {
+                Mat corres = (cv::Mat_<int>(1, 3) << j, ppfInd, corrI);
+                coordAccumulator[accIndex].push_back(corres);
+            }
             
             node = node->next;
         }
@@ -1925,9 +1943,47 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
                 Pose3DPtr pose(new Pose3D(alpha, refIndMax, accVal));  //modelIndex
                 pose->updatePose(rawPose);
 
+                if (spectral) {
+                    //spectral matching
+                    // form corres
+                    Mat voted = coordAccumulator[accInd];
+                    Mat modelI = voted.col(2);
+                    Mat modelJ = voted.col(1) - modelI * n;
+                    Mat sceneJ = voted.col(0);
+                    int corres_n = voted.rows + 1;
+
+                    vector<vector <Mat>> corr_list(corres_n); // (1, 6, CV_32F)
+                    vector<vector <int>> corr_ptind_list(corres_n); // (1, 6, CV_32F)
+
+                    corr_list[0].resize(2);
+                    corr_ptind_list[0].resize(2);
+                    sampled.row(i).copyTo(corr_list[0][0]); // si
+                    sampled_pc.row(refIndMax).copyTo(corr_list[0][1]); //mi
+                    corr_ptind_list[0][0] = i;// si
+                    corr_ptind_list[0][1] = refIndMax;//mi
+
+                    int sj, mj;
+#if defined _OPENMP
+#pragma omp parallel for
+#endif
+
+                    for (int ri = 0; ri < voted.rows; ri++) {
+                        corr_list[ri + 1].resize(2);
+                        corr_ptind_list[ri + 1].resize(2);
+                        sj = sceneJ.at<int>(ri);
+                        sampled.row(sj).copyTo(corr_list[ri + 1][0]);
+                        mj = modelJ.at<int>(ri);
+                        sampled_pc.row(mj).copyTo(corr_list[ri + 1][1]);
+                        corr_ptind_list[ri + 1][0] = sj;// sj
+                        corr_ptind_list[ri + 1][1] = mj;//mj
+                    }
+
+                    spectralMatch(pose, corres_n, corr_list, corr_ptind_list);
+                    
+                }
                 // compute coordinates of the voters
                 // i scene  j scene  i model j model
-                //if (debug) {
+                //if (0) {
                 //    Mat voted = coordAccumulator[accInd];
                 //    Mat modelI = voted.col(2);
                 //    Mat modelJ = voted.col(1) - modelI * n;
@@ -2011,6 +2067,48 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
 
     Pose3DPtr pose(new Pose3D(alpha, refIndMax, maxVotes));
     pose->updatePose(rawPose);
+
+    if (spectral) {
+        //spectral matching
+        // form corres
+        const uint accInd = refIndMax * numAngles + alphaIndMax;
+        Mat voted = coordAccumulator[accInd];
+        Mat modelI = voted.col(2);
+        Mat modelJ = voted.col(1) - modelI * n;
+        Mat sceneJ = voted.col(0);
+        int corres_n = voted.rows + 1;
+
+        vector<vector <Mat>> corr_list(corres_n); // (1, 6, CV_32F)
+        vector<vector <int>> corr_ptind_list(corres_n); // (1, 6, CV_32F)
+
+        corr_list[0].resize(2);
+        corr_ptind_list[0].resize(2);
+        sampled.row(i).copyTo(corr_list[0][0]); // si
+        sampled_pc.row(refIndMax).copyTo(corr_list[0][1]); //mi
+        corr_ptind_list[0][0] = i;// si
+        corr_ptind_list[0][1] = refIndMax;//mi
+
+        int sj, mj;
+#if defined _OPENMP
+#pragma omp parallel for
+#endif
+
+        for (int ri = 0; ri < voted.rows; ri++) {
+            corr_list[ri + 1].resize(2);
+            corr_ptind_list[ri + 1].resize(2);
+            sj = sceneJ.at<int>(ri);
+            sampled.row(sj).copyTo(corr_list[ri + 1][0]);
+            mj = modelJ.at<int>(ri);
+            sampled_pc.row(mj).copyTo(corr_list[ri + 1][1]);
+            corr_ptind_list[ri + 1][0] = sj;// sj
+            corr_ptind_list[ri + 1][1] = mj;//mj
+        }
+
+        spectralMatch(pose, corres_n, corr_list, corr_ptind_list);
+
+    }
+
+
     #if defined (_OPENMP)
     #pragma omp critical
     #endif
@@ -2102,6 +2200,197 @@ void PPF3DDetector::match(const Mat& pc, std::vector<Pose3DPtr>& results, const 
   //results = filterRes;
   //std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
   //if (debug) debugPose(results, "overlap", "afterFreespace", true);
+
+}
+
+void PPF3DDetector::spectralMatch(Pose3DPtr& pose, int corres_n, std::vector<std::vector<cv::Mat>>& corr_list, std::vector<std::vector<int>>& corr_ptind_list)
+{
+    //build consistency matrix
+    float sigmaDist = 0.04; // controls Gaussian kernel width
+    float sigmaAngle = 0.2615;
+    Eigen::MatrixXd A;
+    A.resize(corres_n, corres_n);
+    A.diagonal().setOnes();
+
+#if defined _OPENMP
+#pragma omp parallel for
+#endif
+    for (int r = 0; r < corres_n; r++) {
+        vector<Mat>& corr_1 = corr_list[r];
+        const Vec3f sp1(corr_1[0].ptr<float>(0));
+        const Vec3f sn1(corr_1[0].ptr<float>(0) + 3);
+        const Vec3f mp1(corr_1[1].ptr<float>(0));
+        const Vec3f mn1(corr_1[1].ptr<float>(0) + 3);
+
+        for (int c = r + 1; c < corres_n; c++) {
+            vector<Mat>& corr_2 = corr_list[c];
+            const Vec3f sp2(corr_2[0].ptr<float>(0));
+            const Vec3f sn2(corr_2[0].ptr<float>(0) + 3);
+            const Vec3f mp2(corr_2[1].ptr<float>(0));
+            const Vec3f mn2(corr_2[1].ptr<float>(0) + 3);
+
+            // for every two corres, comput five consistency measures
+            Vec4d sf1_4 = Vec4d::all(0); // agl, a, a, dist
+            computePPFFeatures(sp1, sn1, sp2, sn2, sf1_4);
+            double sf5theta = computeTheta(sp1, sn1, sp2, sn2);
+
+            Vec4d mf1_4 = Vec4d::all(0);
+            computePPFFeatures(mp1, mn1, mp2, mn2, mf1_4);
+            double mf5theta = computeTheta(mp1, mn1, mp2, mn2);
+
+            double da1 = sf1_4[0] - mf1_4[0];
+            double da2 = sf1_4[1] - mf1_4[1];
+            double da3 = sf1_4[2] - mf1_4[2];
+            double dd = sf1_4[3] - mf1_4[3];
+            double da4 = sf5theta - mf5theta;
+            double ta1 = -0.5 * (pow(da1, 2) / pow(sigmaAngle, 2));
+            double ta2 = -0.5 * (pow(da2, 2) / pow(sigmaAngle, 2));
+            double ta3 = -0.5 * (pow(da3, 2) / pow(sigmaAngle, 2));
+            double td = -0.5 * (pow(dd, 2) / pow(sigmaDist, 2));
+            double ta4 = -0.5 * (pow(da1, 2) / pow(sigmaAngle, 2));
+
+            double wc1c2 = exp(ta1 + ta2 + ta3 + td + ta4);
+
+            A(r, c) = wc1c2;
+            A(c, r) = wc1c2;
+        }
+    }
+
+
+    // eigen decomposition
+    Eigen::EigenSolver<Eigen::MatrixXd> es(A);
+    Eigen::MatrixXcd evecs = es.eigenvectors();//获取矩阵特征向量4*4，这里定义的MatrixXcd必须有c，表示获得的是complex复数矩阵
+    Eigen::MatrixXcd evals = es.eigenvalues();//获取矩阵特征值 4*1
+    Eigen::MatrixXd evalsReal;//注意这里定义的MatrixXd里没有c
+    evalsReal = evals.real();//获取特征值实数部分
+    Eigen::MatrixXd::Index evalsMax;
+    evalsReal.rowwise().sum().maxCoeff(&evalsMax);//得到最大特征值的位置
+    double maxev = evalsReal.rowwise().sum().maxCoeff();
+    Eigen::Matrix<double, -1, 1> vm;
+    vm = evecs.real().col(evalsMax);
+
+    //cout << "A: " << endl << A << endl;
+    //cout << "evalsReal: " << endl << evalsReal << endl;
+    //cout << "evecs.real(): " << endl << evecs.real() << endl;
+
+    // eigen vector nms
+    VectorXi sorted_vm_corrid;
+    VectorXd sorted_vm; // 6,5,4,3,2,1
+    sort_vec(vm, sorted_vm, sorted_vm_corrid); // ind = 3,0,4,1...
+    vector<int> corrid_remained;
+    
+    //cout << "原始向量: " << endl;
+    //cout << vm << endl << endl;
+    //cout << "排序后: " << endl;
+    //cout << sorted_vm << endl << endl;
+    //cout << "排序后向量各元素对应的原始向量中的位置" << endl;
+    //cout << sorted_vm_corrid << endl;
+    
+    int i, j;
+    VectorXi is_suppressed(corres_n);
+    is_suppressed.setZero();
+    //vector<bool> is_suppressed(corres_n);
+
+//#if defined _OPENMP
+//#pragma omp parallel for
+//#endif
+//
+//    for (i = 0; i < corres_n; i++) {
+//        is_suppressed[i] = 0;
+//    }
+
+
+    for (i = 0; i < corres_n; i++)                // 循环所有窗口   
+    {
+        if (!is_suppressed[i])           // 判断窗口是否被抑制   
+        {
+            if (sorted_vm[i] < 1e-5) { 
+                is_suppressed[i] = 1; 
+                continue; 
+            }
+            // keeped corres mapping 
+            int corr_id_kpd = sorted_vm_corrid[i];
+            std::vector<int >& corr_ptind_keepd = corr_ptind_list[corr_id_kpd];
+            for (j = i + 1; j < corres_n; j++)
+            {
+                if (!is_suppressed[j])   // 判断窗口是否被抑制   
+                {
+                    if (sorted_vm[j] < 1e-5) {
+                        is_suppressed[j] = 1;
+                        continue;
+                    }
+                    // current corres mapping
+                    int corr_id_crt = sorted_vm_corrid[j];
+                    std::vector<int >& corr_ptind_current = corr_ptind_list[corr_id_crt]; // size 2
+                    // 判断是否被抑制
+                    for (int ikp = 0; ikp < 2; ikp++) {
+                        for (int ic = 0; ic < 2; ic++) {
+                            bool violate = (corr_ptind_keepd[ikp] == corr_ptind_current[ic]);
+                            if (violate) {
+                                is_suppressed[j] = 1;           // 将窗口j标记为抑制  
+
+                            }
+                        }
+                    }
+
+                }
+            }
+        }
+    }
+
+    for (i = 0; i < corres_n; i++)                  // 遍历所有输入窗口   
+    {
+        if (!is_suppressed[i])             // 将未发生抑制的窗口信息保存到输出信息中   
+        {
+            corrid_remained.push_back( sorted_vm_corrid[i]);
+        }
+    }
+
+    pose->updateVotes(corrid_remained.size());
+    pose->updateEigenv(maxev);
+
+    // update pose
+    //Matx44d newPose = Matx44d::eye();
+    //int selInd = corrid_remained.size();
+    //bool valid = false;
+    //if (selInd >= 6)
+    //{
+
+    //    Mat Src_Match = Mat(selInd, 6, CV_64F);
+    //    Mat Dst_Match = Mat(selInd, 6, CV_64F);
+
+    //    for (int di = 0; di < selInd; di++)
+    //    {
+    //        int corrid = corrid_remained[di];
+    //        vector<Mat>& corr_ = corr_list[corrid];
+
+    //        const float* srcPt = corr_[0].ptr<float>(0);
+    //        const float* dstPt = corr_[1].ptr<float>(0);
+    //        double* srcMatchPt = Src_Match.ptr<double>(di);
+    //        double* dstMatchPt = Dst_Match.ptr<double>(di);
+    //        int ci = 0;
+
+    //        for (ci = 0; ci < 6; ci++)
+    //        {
+    //            srcMatchPt[ci] = (double)srcPt[ci];
+    //            dstMatchPt[ci] = (double)dstPt[ci];
+    //        }
+    //    }
+
+    //    Vec3d rpy, t;
+    //    minimizePointToPlaneMetric(Src_Match, Dst_Match, rpy, t);
+    //    if (cvIsNaN(cv::trace(rpy)) || cvIsNaN(cv::norm(t)))
+    //        valid = false;
+    //    else {
+    //        valid = true;
+    //        getTransformMat(rpy, t, newPose);
+    //    }
+    //}
+    //else { valid = false; }
+
+    //if (valid)
+    //    pose->updatePose(newPose);
+
 
 }
 
@@ -2365,11 +2654,11 @@ void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bo
         //debugPose(finalPoses, "overlap", "afterOverlapRatio", true);
         //results = finalPoses;
 
-        int postPoseNum = 200;
-        if (finalPoses.size() < postPoseNum) postPoseNum = finalPoses.size();
-        vector<Pose3DPtr> resultsPost(finalPoses.begin(), finalPoses.begin() + postPoseNum);
-        results = resultsPost;
-        cout << "NMS results num: " << results.size() << endl;
+        //int postPoseNum = 300;
+        //if (finalPoses.size() < postPoseNum) postPoseNum = finalPoses.size();
+        //vector<Pose3DPtr> resultsPost(finalPoses.begin(), finalPoses.begin() + postPoseNum);
+        //results = resultsPost;
+        //cout << "NMS results num: " << results.size() << endl;
 
         if (debug) {
             //debugPose(results, "overlap", "afterNMS", true);
@@ -2392,12 +2681,12 @@ void PPF3DDetector::postProcessing(std::vector<Pose3DPtr>& results, ICP& icp, bo
         //SparseICP(results, sampled_pc_refinement, downsample_scene_dense_refinement, 5);
 
         icp.registerModelToScene(sampled_pc_refinement, downsample_scene_dense_refinement, results);
-        //double angle_th = 30;
-        //double dist_th = model_diameter * 0.02;
-        //overlapRatio(sampled_pc_refinement, downsample_scene_dense_refinement, downsample_scene_dense_refinement_flannIndex, results, dist_th, angle_th, 1); //model_diameter * 0.005, 25
-        double dist_th = model_diameter * 0.01;
-        sdfRatio(results, dist_th);
-        freespaceRatio(results, dist_th); // model_diameter * 0.01
+        double angle_th = 30;
+        double dist_th = model_diameter * 0.02;
+        overlapRatio(sampled_pc_refinement, downsample_scene_dense_refinement, downsample_scene_dense_refinement_flannIndex, results, dist_th, angle_th, 1); //model_diameter * 0.005, 25
+        //double dist_th = model_diameter * 0.01;
+        //sdfRatio(results, dist_th);
+        //freespaceRatio(results, dist_th); // model_diameter * 0.01
         std::sort(results.begin(), results.end(), pose3DPtrCompareOverlap);
         //if (debug) debugPose(results, "overlap", "afterOverlapRatio", true);
 

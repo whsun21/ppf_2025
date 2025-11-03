@@ -192,7 +192,8 @@ static float getRejectionThreshold(float* r, int m, float outlierScale)
 }
 
 // Kok Lim Low's linearization
-static void minimizePointToPlaneMetric(Mat Src, Mat Dst, Vec3d& rpy, Vec3d& t)
+//static void minimizePointToPlaneMetric(Mat Src, Mat Dst, Vec3d& rpy, Vec3d& t)
+void minimizePointToPlaneMetric(Mat Src, Mat Dst, Vec3d& rpy, Vec3d& t)
 {
   //Mat sub = Dst - Src;
   Mat A = Mat(Src.rows, 6, CV_64F);
@@ -219,7 +220,8 @@ static void minimizePointToPlaneMetric(Mat Src, Mat Dst, Vec3d& rpy, Vec3d& t)
   rpy_t.rowRange(3, 6).copyTo(t);
 }
 
-static void getTransformMat(Vec3d& euler, Vec3d& t, Matx44d& Pose)
+//static void getTransformMat(Vec3d& euler, Vec3d& t, Matx44d& Pose)
+void getTransformMat(Vec3d& euler, Vec3d& t, Matx44d& Pose)
 {
   Matx33d R;
   eulerToDCM(euler, R);

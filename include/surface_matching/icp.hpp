@@ -56,6 +56,9 @@ namespace cv
 namespace ppf_match_3d
 {
 
+void minimizePointToPlaneMetric(Mat Src, Mat Dst, Vec3d& rpy, Vec3d& t);
+void getTransformMat(Vec3d& euler, Vec3d& t, Matx44d& Pose);
+
 //! @addtogroup surface_matching
 //! @{
 

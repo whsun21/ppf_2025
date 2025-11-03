@@ -19,6 +19,7 @@
 using namespace std;
 using namespace cv;
 using namespace ppf_match_3d;
+using namespace Eigen;
 
 int testUwa() {
     string dataName = "UWA";
@@ -590,20 +591,20 @@ int testIcbin() {
 
     //para
     string samplingMethod = "cube"; // cube, normal
-    double orientationDiffThreshold = 2. / 180. * M_PI;
+    double orientationDiffThreshold = 5 / 180. * M_PI; // 10
     double nmsThreshold = 0.5; //0.2 0.5
     bool refineEnabled = true;
     bool nmsEnabled = true;
-    double ppf_angle_constraint = 30. / 180. * M_PI; //偏离90度至少20度，点对中1号点的法向与点对连线的夹角，与90度之差的绝对值，大于给定阈值
-    double ppf_distance_constraint = 10;  // 1好点和2好点，至少相聚10*sampled resolution
+    double ppf_angle_constraint = 5 / 180. * M_PI; //5 ， 偏离90度至少20度，点对中1号点的法向与点对连线的夹角，与90度之差的绝对值，大于给定阈值
+    double ppf_distance_constraint = 0;  // 0, 1好点和2好点，至少相聚10*sampled resolution
 
     // model
-    double relativeSamplingStep = 0.025;
+    double relativeSamplingStep = 0.03;
     // match
     double keypointStep = 5;
     double relativeSceneDistance = 0.05;
     // Create an instance of ICP
-    ICP icp(5, 0.005f, 0, 3); //100, 0.005f, 2.5f, 8
+    ICP icp(5, 0.005f, 0, 1); //100, 0.005f, 2.5f, 8
     //path
     string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/IC-BIN-cvpr16/cvpr16_scenario_2/";
     //string configPath = "3D models/Mian/";
@@ -625,11 +626,14 @@ int testIcbin() {
     string modelFilePath;
     string sdfFilePath;
     for (int i = 0; i < uwaModelName.size(); i++) {
-        modelFilePath = modelPath + uwaModelName[i] + "_wt.ply";
+        modelFilePath = modelPath + uwaModelName[i] + "_plain.ply";
         sdfFilePath = modelPath + uwaModelName[i] + "_sdf.cdf";
 
         MyMesh pcM;
         vcg::tri::io::ImporterPLY<MyMesh>::Open(pcM, modelFilePath.c_str());
+        tri::UpdateNormal<MyMesh>::PerFace(pcM);
+        tri::UpdateNormal<MyMesh>::PerVertexFromCurrentFaceNormal(pcM);
+        tri::UpdateNormal<MyMesh>::NormalizePerVertex(pcM);
         Mat pc;
         vcgMesh2cvMat(pcM, pc);
 
@@ -1060,6 +1064,8 @@ int debugIcbin(char** argv) {
     bool nmsEnabled = true;
     double ppf_angle_constraint = 5 / 180. * M_PI; //5 ， 偏离90度至少20度，点对中1号点的法向与点对连线的夹角，与90度之差的绝对值，大于给定阈值
     double ppf_distance_constraint = 0;  // 0, 1好点和2好点，至少相聚10*sampled resolution
+    // 2
+    bool spectral = true; //true
 
     // model
     double relativeSamplingStep = 0.03;
@@ -1143,7 +1149,8 @@ int debugIcbin(char** argv) {
 
     detector.setPPFAngleConstraint(ppf_angle_constraint); /// 一定在trian之前
     detector.setPPFDistanceConstraint(ppf_distance_constraint); /// 一定在trian之前
-    
+    detector.setSpectral(spectral);
+
     detector.trainModel(pc); //// 
 
     detector.setMultiGtPose(gt_poses, debugGTPoseModelPath); // 一定在train之后
@@ -1240,7 +1247,50 @@ int debugIcbin(char** argv) {
     return 0;
 }
 
+void sort_vec(const VectorXd& vec, VectorXd& sorted_vec, VectorXi& ind) {
+    ind = VectorXi::LinSpaced(vec.size(), 0, vec.size() - 1);//[0 1 2 3 ... N-1]
+    auto rule = [vec](int i, int j)->bool {
+        return vec(i) > vec(j);
+        };//正则表达式，作为sort的谓词
+    std::sort(ind.data(), ind.data() + ind.size(), rule);
+    //data成员函数返回VectorXd的第一个元素的指针，类似于begin()
+    sorted_vec.resize(vec.size());
+    for (int i = 0; i < vec.size(); i++) {
+        sorted_vec(i) = vec(ind(i));
+    }
+}
 
+void testEigen() {
+    Eigen::Matrix<double, 5, 5> A;
+    A<< 1, 1, 1, 0, 0,    // Initialize A. The elements can also be
+        1, 1, 1, 0, 0,   // matrices, which are stacked along cols
+        1, 1, 1, 0, 0,
+        0, 0, 0, 1, 1,    // and then the rows are stacked.
+        0, 0, 0, 1, 1;     // and then the rows are stacked.
+    Eigen::EigenSolver<Eigen::MatrixXd> es(A);
+    Eigen::MatrixXcd evecs = es.eigenvectors();//获取矩阵特征向量4*4，这里定义的MatrixXcd必须有c，表示获得的是complex复数矩阵
+    Eigen::MatrixXcd evals = es.eigenvalues();//获取矩阵特征值 4*1
+    Eigen::MatrixXd evalsReal;//注意这里定义的MatrixXd里没有c
+    evalsReal = evals.real();//获取特征值实数部分
+    Eigen::MatrixXd::Index evalsMax;
+    evalsReal.rowwise().sum().maxCoeff(&evalsMax);//得到最大特征值的位置
+    //Eigen::Matrix<double, -1, 1> q1;
+    Eigen::VectorXd  q1;
+    q1 = evecs.real().col(evalsMax);
+    cout << endl;
+    cout << q1 << endl;
+    
+    VectorXi ind;
+    VectorXd sorted_vec;
+    sort_vec(q1, sorted_vec, ind);
+    cout << "原始向量:\n";
+    cout << q1 << endl << endl;
+    cout << "排序后:\n";
+    cout << sorted_vec << endl << endl;
+    cout << "排序后向量各元素对应的原始向量中的位置" << endl;
+    cout << ind << endl;
+
+}
 
 int main(int argc, char** argv) {
 #if (defined __x86_64__ || defined _M_X64)
@@ -1254,6 +1304,9 @@ int main(int argc, char** argv) {
 #else
     cout << "Running without OpenMP and without TBB" << endl;
 #endif
+
+
+    //testEigen();
 
     // uwa
     //testUwa();

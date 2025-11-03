@@ -29,7 +29,7 @@ typedef pcl::Normal NormalType;
 int showVotes() {
     //read votes
     string rootPath = "D:/wenhao.sun/Documents/GitHub/1-project/ppf_2025/samples/data/results/parasaurolophus-rs7/";
-    string poseInstance = "debug_afterHoughVot_1_numVotes_77.000000";
+    string poseInstance = "debug_afterHoughVot_1_numVotes_19.000000";
 
     cout << "****************** show votes ******************" << endl;
     cout << "path: " << rootPath << endl;
@@ -69,30 +69,33 @@ int showVotes() {
     pcl::copyPointCloud(*sj, *sj_normals);
 
 
-    //set PCL viewer
+    //set PCL viewer0
     pcl::visualization::PCLVisualizer viewer("PCL Viewer");
-    viewer.setBackgroundColor(0.0, 0.0, 0.0);
+    //ÉèÖÃµãÔÆÑÕÉ«
+
+    viewer.setBackgroundColor(0.0, 0.0, 0.0);// rgb(41, 133, 122)
+    //viewer.setBackgroundColor(168 / 255., 160 / 255., 138 / 255.); //142/255.,169/255.,127/255.
 
     viewer.addPointCloud<PointType>(mi_cloud, "mi");  // white
     viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 5, "mi");
     viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, 0, 0, 1, "mi");
-    viewer.addPointCloudNormals<pcl::PointXYZ, pcl::Normal>(mi_cloud, mi_normals, 1, 6, "mi cloud normals");
+    //viewer.addPointCloudNormals<pcl::PointXYZ, pcl::Normal>(mi_cloud, mi_normals, 1, 6, "mi cloud normals");
 
     viewer.addPointCloud<PointType>(mj_cloud, "mj");  // white
     viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 5, "mj");
     viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, 1, 0, 1, "mj");
-    viewer.addPointCloudNormals<pcl::PointXYZ, pcl::Normal>(mj_cloud, mj_normals, 1, 6, "mj cloud normals");
+    //viewer.addPointCloudNormals<pcl::PointXYZ, pcl::Normal>(mj_cloud, mj_normals, 1, 6, "mj cloud normals");
 
     viewer.addPointCloud<PointType>(si_cloud, "si");  // white
     viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 5, "si");
     viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, 0.5, 0.5, 1, "si");
-    viewer.addPointCloudNormals<pcl::PointXYZ, pcl::Normal>(si_cloud, si_normals, 1, 6, "si cloud normals");
+    //viewer.addPointCloudNormals<pcl::PointXYZ, pcl::Normal>(si_cloud, si_normals, 1, 6, "si cloud normals");
 
     viewer.addPointCloud<PointType>(sj_cloud, "sj");  // white
     viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 5, "sj");
     viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, 0, 1, 1, "sj");
-    viewer.addPointCloudNormals<pcl::PointXYZ, pcl::Normal>(sj_cloud, sj_normals, 1, 6, "sj cloud normals");
-    viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, 0, 1, 1, "sj cloud normals");
+    //viewer.addPointCloudNormals<pcl::PointXYZ, pcl::Normal>(sj_cloud, sj_normals, 1, 6, "sj cloud normals");
+    //viewer.setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, 0, 1, 1, "sj cloud normals");
 
     // line
     for (int i = 0; i < mj->size(); i++) {
@@ -243,9 +246,9 @@ int main(int argc, char** argv) {
     //testUwa();
     //debugUwaFailureCases(method);
     //debug(argv);
-    //showVotes();
+    showVotes();
 
-    getPlane();
+    //getPlane();
 
 }
 

@@ -102,6 +102,13 @@ void Pose3D::updateOverlap(double Overlap) {
     this->overlap = Overlap;
 }
 
+void Pose3D::updateVotes(double votes) {
+    this->numVotes = votes;
+}
+void Pose3D::updateEigenv(double ev) {
+    this->eigenv = ev;
+}
+
 void Pose3D::updatefreespaceIntersec(int intersection) {
     this->freespaceIntersec = - intersection ;
 }

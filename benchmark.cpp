@@ -163,29 +163,7 @@ int evalUwa(string & Method) {
             gt_ifs.close();
 
 
-            // read pred
-            string predFilePath = predPath + gtName + ".txt";
-            ifstream pred_ifs(predFilePath);
-            if (!pred_ifs.is_open()) exit(1);
-
-            string modelNameInPred;
-            getline(pred_ifs, modelNameInPred); ////////
-            if (modelNameInPred != modelNameInCfg) { cout << "not same: " << "gt " << gtPath << "pred " << predFilePath << endl; exit(1); }
-            string timeStr;
-            getline(pred_ifs, timeStr);
-            int n = timeStr.find("=");
-            string timeStr2 = timeStr.substr(n + 1, timeStr.length() - n);
-            //cout << timeStr2 << endl;
-            double time = stod(timeStr2, 0);
-            timeMap[modelNameInPred].push_back(time);
-
-            Matx44d pred_pose;
-            for (int ii = 0; ii < 4; ii++)
-                for (int jj = 0; jj < 4; jj++)
-                {
-                    pred_ifs >> pred_pose(ii, jj);
-                }
-            pred_ifs.close();
+            
 
             // build check table
             // reaf scene path from cfg
@@ -199,17 +177,54 @@ int evalUwa(string & Method) {
                 sceneName = mn[0];
             }
             string str = gtName + "_" + sceneName; ////////////////////////
-            checkTableMap[modelNameInPred].push_back(str);
+            checkTableMap[modelNameInCfg].push_back(str);
 
             // read occulsion
             LPSTR  occlu = new char[1024];
             GetPrivateProfileString("MODELS", modelOccluKey.c_str(), "NULL", occlu, 512, cfgPath);
             string occlus = occlu;
             double occlud = stod(occlus);
-            occulsionMap[modelNameInPred].push_back(occlud);
+            occulsionMap[modelNameInCfg].push_back(occlud);
+
+            // read pred
+            string predFilePath = predPath + gtName + ".txt";
+            ifstream pred_ifs(predFilePath);
+            if (!pred_ifs.is_open()) {
+                if (method.find("pv_") != std::string::npos) {
+                    timeMap[modelNameInCfg].push_back(1);
+                    ADDMap[modelNameInCfg].push_back(1e7);
+                    ADIMap[modelNameInCfg].push_back(1e7);
+                    centerErrorMap[modelNameInCfg].push_back(1e7);
+                    phiMap[modelNameInCfg].push_back(1e7);
+                    dNormMap[modelNameInCfg].push_back(1e7);
+                    cout << "dont have: " << predFilePath << endl;
+                    continue;
+                }
+                else { exit(1); }
+
+            }
+
+            string modelNameInPred;
+            getline(pred_ifs, modelNameInPred); ////////
+            if (modelNameInPred != modelNameInCfg) { cout << "not same: " << "gt " << gtPath << "pred " << predFilePath << endl; exit(1); }
+            string timeStr;
+            getline(pred_ifs, timeStr);
+            int n = timeStr.find("=");
+            string timeStr2 = timeStr.substr(n + 1, timeStr.length() - n);
+            //cout << timeStr2 << endl;
+            double time = stod(timeStr2, 0);
+            timeMap[modelNameInCfg].push_back(time);
+
+            Matx44d pred_pose;
+            for (int ii = 0; ii < 4; ii++)
+                for (int jj = 0; jj < 4; jj++)
+                {
+                    pred_ifs >> pred_pose(ii, jj);
+                }
+            pred_ifs.close();
 
             // ADD
-            Mat& pc = modelPC[modelNameInPred];
+            Mat& pc = modelPC[modelNameInCfg];
             Mat pct_gt = transformPCPose(pc, gt_pose); //pc是原始模型
             Mat pct_pred = transformPCPose(pc, pred_pose); //pc是原始模型
 
@@ -587,12 +602,15 @@ int evalRateKinect(string& Method) {
     return 0;
 }
 
-int rateUwa(string& Method) {
+int rateUwa(string& Method, double AD_scale_) {
 
     string method = Method;
     cout << "*****************************  " << method << "  *****************************" << endl;
     string dataName = "UWA";
     cout << "rate " << dataName << endl;
+    double AD_scale = AD_scale_;
+    cout << "AD_scale " << AD_scale << endl;
+
 
     string evalFileRootPath = "D:/wenhao.sun/Documents/GitHub/1-project/eval/" + method + "Eval/"+ dataName + "/";
 
@@ -669,7 +687,6 @@ int rateUwa(string& Method) {
     //ADDthres[0] = 0.1;
     //ADDthres[1] = 0.2;
     //ADDthres[2] = 0.3;
-    double AD_scale = 0.1;
     double manifold_pos_scale = 0.1;
 
 
@@ -818,12 +835,12 @@ int rateUwa(string& Method) {
 }
 
 /*目标是比较 predicted pose 和 gt pose*/
-int evalRateIcbin(string& Method) {
+int evalRateIcbin(string& Method, double AD_scale_) {
     string method = Method;
     cout << "*****************************  " << method << "  *****************************" << endl;
 
     string dataName = "icbin";
-    double ADI_scale = 0.1;
+    double ADI_scale = AD_scale_;
     cout << "eval & rate " << dataName << " scenario2" << ", ADI_scale = " << ADI_scale << endl;
 
     string rootPath = "D:/wenhao.sun/Documents/datasets/object_recognition/IC-BIN-cvpr16/cvpr16_scenario_2/";
@@ -932,7 +949,16 @@ int evalRateIcbin(string& Method) {
                 //1. read predicted 9 poses
                 string predFilePath = predPath + scenarioName + "-" + sid + "-" + modelName + ".txt"; //mixed-36-coffee_cup
                 ifstream pred_ifs(predFilePath);
-                if (!pred_ifs.is_open()) exit(1);
+                if (!pred_ifs.is_open()) {
+                    if (method.find("pv_") != std::string::npos) {
+                        times.push_back(1);
+                        modelTPMap[modelName] += 0;
+                        modelTotalNumMap[modelName] += modelCount;
+                        cout << "dont have: " << predFilePath << endl;
+                        continue;
+                    }
+                    else{ exit(1); }
+                }
 
                 // file head check
                 string modelNameModelCountInPred;
@@ -957,10 +983,16 @@ int evalRateIcbin(string& Method) {
                 // poses
                 vector<Matx44d> pred_poses(modelCountInPred);
                 vector<float> scores(modelCountInPred);
-                string idx_score;
+                string tmp_score;
                 for (int ip = 0; ip < modelCountInPred; ip++) {
-                    pred_ifs >> idx_score; int n = idx_score.find("=");
-                    scores[ip] = stof(idx_score.substr(n + 1, idx_score.length() - n));
+                    pred_ifs >> tmp_score;
+                    if (method.find("pv_") != std::string::npos) {
+                        scores[ip] = stof(tmp_score);
+                    }
+                    else {
+                        int n = tmp_score.find("=");
+                        scores[ip] = stof(tmp_score.substr(n + 1, tmp_score.length() - n));
+                    }
                     for (int ii = 0; ii < 4; ii++)
                         for (int jj = 0; jj < 4; jj++)
                         {
@@ -1076,7 +1108,7 @@ int evalRateIcbin(string& Method) {
 
                 double rate = (double)tpsum / (double)modelCount;
                 if (rate < 0.7) {
-                   cout <<  scenarioName + "-" + sid + "-" + modelName <<endl;
+                   //cout <<  scenarioName + "-" + sid + "-" + modelName <<endl;
                 }
             }
         }
@@ -1365,19 +1397,28 @@ int main() {
 #else
     cout << "Running without OpenMP and without TBB" << endl;
 #endif
-    string method = "halcon";
+    //string method = "halcon";
     //string method = "ppf_2025";
+
+    //string method = "pv_ppfhist";
+    //string method = "pv_shot";
+    //string method = "pv_si";
+    string method = "pv_fpfh";
+
+    double AD_scale = 0.1;
 
     // uwa
     //evalUwa(method);
-    //rateUwa(method);
+    //rateUwa(method, AD_scale);
+
+    // icbin
+    evalRateIcbin(method, AD_scale);
 
     // kinect
     //evalRateKinect(method);
 
 
-    // icbin
-    evalRateIcbin(method);
+
 
     // lmo
     //evalRateLmo(method);

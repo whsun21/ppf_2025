@@ -98,6 +98,9 @@ public:
   
   CV_WRAP void updateOverlap(double Overlap);
 
+  CV_WRAP void updateVotes(double votes);
+  CV_WRAP void updateEigenv(double ev);
+
   CV_WRAP void updatefreespaceIntersec(int intersection);
 
   CV_WRAP void addVoter(Mat& Voter);
@@ -141,6 +144,7 @@ public:
   double freespaceIntersec;
   int cluster_count;
   std::vector< Vec4d> qs;
+  double eigenv; // eigen value
 };
 
 /**
